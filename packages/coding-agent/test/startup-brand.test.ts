@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { TUI } from "../../tui/src/index.ts";
+import { VERSION } from "../src/config.ts";
 import {
 	StartupBrandComponent,
 	shouldRenderLargeStartupBrand,
@@ -16,14 +17,15 @@ describe("StartupBrandComponent", () => {
 					rows: 40,
 				},
 			} as unknown as TUI,
-			"0.75.5",
+			VERSION,
 			"mlens",
 		);
 
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
 		expect(rendered).toContain("██████████████");
-		expect(rendered).toContain("mlens v0.75.5");
+		expect(VERSION).toBe("0.1.1");
+		expect(rendered).toContain("mlens v0.1.1");
 		expect(rendered.split("\n").filter((line) => line.trim().length > 0).length).toBeGreaterThanOrEqual(8);
 	});
 

@@ -112,7 +112,7 @@ Attribution:
 
 ## Releasing
 
-**Lockstep versioning**: all packages share one version; every release updates all together. `patch` = fixes + additions, `minor` = breaking changes. No major releases.
+**Lockstep versioning**: all packages share one version, and Git tags are `v<version>` (for example `v0.1.1`).
 
 1. **Update CHANGELOGs**: ask the user whether they ran the `/cl` prompt on the latest commit on `main`. If not, they must run `/cl` first to audit and update each package's `[Unreleased]` section before releasing.
 
@@ -121,52 +121,32 @@ Attribution:
    npm run release:local -- --out /tmp/pi-local-release --force
    cd /tmp
 
-   # Node package install smoke tests
-   /tmp/pi-local-release/node/pi --help
-   /tmp/pi-local-release/node/pi --version
-   /tmp/pi-local-release/node/pi --list-models
-   /tmp/pi-local-release/node/pi -p "Say exactly: ok"
-   /tmp/pi-local-release/node/pi
+   # Node package smoke tests
+   /tmp/pi-local-release/node/mlens --help
+   /tmp/pi-local-release/node/mlens --version
+   /tmp/pi-local-release/node/mlens --list-models
+   /tmp/pi-local-release/node/mlens -p "Say exactly: ok"
+   /tmp/pi-local-release/node/mlens
 
    # Bun binary smoke tests
-   /tmp/pi-local-release/bun/pi --help
-   /tmp/pi-local-release/bun/pi --version
-   /tmp/pi-local-release/bun/pi --list-models
-   /tmp/pi-local-release/bun/pi -p "Say exactly: ok"
-   /tmp/pi-local-release/bun/pi
+   /tmp/pi-local-release/bun/mlens --help
+   /tmp/pi-local-release/bun/mlens --version
+   /tmp/pi-local-release/bun/mlens --list-models
+   /tmp/pi-local-release/bun/mlens -p "Say exactly: ok"
+   /tmp/pi-local-release/bun/mlens
    ```
-   Verify both Node and Bun startup, model/account listing, interactive startup, and at least one real prompt with the intended default provider. The bare commands `/tmp/pi-local-release/node/pi` and `/tmp/pi-local-release/bun/pi` start interactive mode; run each in tmux, submit a prompt, and wait for the model reply before considering the interactive smoke test passed. Failures are release blockers unless the user explicitly accepts the risk.
+   Verify both Node and Bun startup, model/account listing, interactive startup, and at least one real prompt with the intended default provider. The bare commands `/tmp/pi-local-release/node/mlens` and `/tmp/pi-local-release/bun/mlens` start interactive mode; run each in tmux, submit a prompt, and wait for the model reply before considering the interactive smoke test passed. Failures are release blockers unless the user explicitly accepts the risk.
 
-3. **Verify npm authentication**: run `npm whoami` before starting the release script. If it fails, stop and tell the user to run `npm login` manually first, then retry after they confirm `npm whoami` succeeds.
-
-4. **Brief the user on the WebAuthn flow before running anything**. Print exactly the following message and then stop and wait for the user to confirm in their next message:
-
-   ```
-   Before the release publish step, read this carefully:
-
-   - `npm publish` uses WebAuthn 2FA.
-   - The safest flow is for you to run the publish command yourself, because you can see and open the npm authentication URL immediately.
-   - I will tell you the exact command to run.
-   - When npm prints an auth URL, cmd/ctrl-click it, log in in the browser, and select the "don't ask again for N minutes" option if available.
-   - This may happen more than once during publish.
-   - Do not rerun `npm run release:patch` or `npm run release:minor` after a failed publish; only rerun the publish command I give you.
-
-   Reply "ready" once you have read this and are ready to run the command locally.
-   ```
-
-   Do not proceed to step 5 until the user explicitly confirms.
-
-5. **Run the release script**:
+3. **Run the GitHub release script**:
    ```bash
-   npm run release:patch    # fixes + additions
-   npm run release:minor    # breaking changes
+   npm run release:github -- 0.1.1
    ```
-   Do not pass a `timeout` to the bash tool for this call. If publish fails during the WebAuthn/OTP step after version bump, stop and tell the user to run `npm run publish` themselves from the repo root. Never rerun the version bump on your own. After the user reports publish success, continue with the post-publish steps.
+   The script accepts `0.1.1` or `v0.1.1`, updates all workspace versions, finalizes changelogs, commits the release, tags `v0.1.1`, adds fresh `[Unreleased]` sections, commits the reset, and pushes `main` plus the tag.
 
-6. **After publish succeeds**:
-   - Add fresh `## [Unreleased]` sections to package changelogs.
-   - Commit with `Add [Unreleased] section for next cycle`.
-   - Push `main` and the release tag.
+4. **Verify GitHub Release publication**:
+   - Wait for the `Build Binaries` GitHub Actions workflow triggered by the pushed tag to complete.
+   - Confirm the GitHub Release for `v0.1.1` exists and includes the expected `mlens-*` archives.
+   - If the workflow or release asset upload fails, fix the issue on `main` and cut a new version. Do not reuse a broken tag.
 
 ## User Override
 

@@ -1,65 +1,50 @@
 #!/usr/bin/env node
 /**
- * Release script for pi-mono
+ * GitHub release script for mlens.
  *
  * Usage:
- *   node scripts/release.mjs <major|minor|patch>
  *   node scripts/release.mjs <x.y.z>
+ *   node scripts/release.mjs <vX.Y.Z>
  *
  * Steps:
  * 1. Check for uncommitted changes
- * 2. Bump version via npm run version:xxx or set an explicit version
+ * 2. Set the lockstep workspace version
  * 3. Update CHANGELOG.md files: [Unreleased] -> [version] - date
  * 4. Generate the coding-agent npm-shrinkwrap.json
- * 5. Commit and tag
- * 6. Publish to npm
- * 7. Add new [Unreleased] section to changelogs
- * 8. Commit
+ * 5. Commit and tag the release commit
+ * 6. Add new [Unreleased] sections to changelogs
+ * 7. Commit the next-cycle changelog reset
+ * 8. Push main and the release tag (GitHub Actions publishes binaries)
  */
 
 import { execSync } from "child_process";
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
 
-const RELEASE_TARGET = process.argv[2];
-const BUMP_TYPES = new Set(["major", "minor", "patch"]);
-const SEMVER_RE = /^\d+\.\d+\.\d+$/;
+const rawTarget = process.argv[2];
 
-if (!RELEASE_TARGET || (!BUMP_TYPES.has(RELEASE_TARGET) && !SEMVER_RE.test(RELEASE_TARGET))) {
-	console.error("Usage: node scripts/release.mjs <major|minor|patch|x.y.z>");
+if (!rawTarget) {
+	console.error("Usage: node scripts/release.mjs <x.y.z|vX.Y.Z>");
 	process.exit(1);
+}
+
+function normalizeReleaseVersion(target) {
+	const normalized = target.startsWith("v") ? target.slice(1) : target;
+	if (!/^\d+\.\d+\.\d+$/u.test(normalized)) {
+		console.error(`Invalid release version "${target}". Use x.y.z or vX.Y.Z.`);
+		process.exit(1);
+	}
+	return normalized;
 }
 
 function run(cmd, options = {}) {
 	console.log(`$ ${cmd}`);
 	try {
 		return execSync(cmd, { encoding: "utf-8", stdio: options.silent ? "pipe" : "inherit", ...options });
-	} catch (e) {
-		if (!options.ignoreError) {
-			console.error(`Command failed: ${cmd}`);
-			process.exit(1);
-		}
-		return null;
+	} catch {
+		console.error(`Command failed: ${cmd}`);
+		process.exit(1);
 	}
-}
-
-function getVersion() {
-	const pkg = JSON.parse(readFileSync("packages/ai/package.json", "utf-8"));
-	return pkg.version;
-}
-
-function compareVersions(a, b) {
-	const aParts = a.split(".").map(Number);
-	const bParts = b.split(".").map(Number);
-
-	for (let i = 0; i < 3; i++) {
-		const diff = (aParts[i] || 0) - (bParts[i] || 0);
-		if (diff !== 0) {
-			return diff;
-		}
-	}
-
-	return 0;
 }
 
 function shellQuote(value) {
@@ -76,125 +61,88 @@ function stageChangedFiles() {
 	run(`git add -- ${paths.map(shellQuote).join(" ")}`);
 }
 
-function bumpOrSetVersion(target) {
-	const currentVersion = getVersion();
-
-	if (BUMP_TYPES.has(target)) {
-		console.log(`Bumping version (${target})...`);
-		run(`npm run version:${target}`);
-		return getVersion();
-	}
-
-	if (compareVersions(target, currentVersion) <= 0) {
-		console.error(`Error: explicit version ${target} must be greater than current version ${currentVersion}.`);
-		process.exit(1);
-	}
-
-	console.log(`Setting explicit version (${target})...`);
-	run(`npm version ${target} -ws --no-git-tag-version && node scripts/sync-versions.js && npm install --package-lock-only`);
-	return getVersion();
-}
-
 function getChangelogs() {
 	const packagesDir = "packages";
-	const packages = readdirSync(packagesDir);
-	return packages
+	return readdirSync(packagesDir)
 		.map((pkg) => join(packagesDir, pkg, "CHANGELOG.md"))
 		.filter((path) => existsSync(path));
 }
 
 function updateChangelogsForRelease(version) {
 	const date = new Date().toISOString().split("T")[0];
-	const changelogs = getChangelogs();
-
-	for (const changelog of changelogs) {
+	for (const changelog of getChangelogs()) {
 		const content = readFileSync(changelog, "utf-8");
-
 		if (!content.includes("## [Unreleased]")) {
 			console.log(`  Skipping ${changelog}: no [Unreleased] section`);
 			continue;
 		}
 
-		const updated = content.replace(
-			"## [Unreleased]",
-			`## [${version}] - ${date}`
-		);
+		const updated = content.replace("## [Unreleased]", `## [${version}] - ${date}`);
 		writeFileSync(changelog, updated);
 		console.log(`  Updated ${changelog}`);
 	}
 }
 
 function addUnreleasedSection() {
-	const changelogs = getChangelogs();
 	const unreleasedSection = "## [Unreleased]\n\n";
-
-	for (const changelog of changelogs) {
+	for (const changelog of getChangelogs()) {
 		const content = readFileSync(changelog, "utf-8");
-
-		// Insert after "# Changelog\n\n"
-		const updated = content.replace(
-			/^(# Changelog\n\n)/,
-			`$1${unreleasedSection}`
-		);
+		const updated = content.replace(/^(# Changelog\n\n)/u, `$1${unreleasedSection}`);
 		writeFileSync(changelog, updated);
 		console.log(`  Added [Unreleased] to ${changelog}`);
 	}
 }
 
-// Main flow
-console.log("\n=== Release Script ===\n");
+function setWorkspaceVersion(version) {
+	run(`npm version ${version} --workspaces --no-git-tag-version --allow-same-version`);
+	run("node scripts/sync-versions.js");
+	run("npm install --package-lock-only --ignore-scripts");
+}
 
-// 1. Check for uncommitted changes
+const version = normalizeReleaseVersion(rawTarget);
+
+console.log("\n=== GitHub Release Script ===\n");
+
 console.log("Checking for uncommitted changes...");
 const status = run("git status --porcelain", { silent: true });
 if (status && status.trim()) {
-	console.error("Error: Uncommitted changes detected. Commit or stash first.");
+	console.error("Error: Uncommitted changes detected. Commit or revert them first.");
 	console.error(status);
 	process.exit(1);
 }
 console.log("  Working directory clean\n");
 
-// 2. Bump or set version
-const version = bumpOrSetVersion(RELEASE_TARGET);
-console.log(`  New version: ${version}\n`);
+console.log(`Setting workspace version to ${version}...`);
+setWorkspaceVersion(version);
+console.log();
 
-// 3. Update changelogs
 console.log("Updating CHANGELOG.md files...");
 updateChangelogsForRelease(version);
 console.log();
 
-// 4. Generate publish shrinkwrap
 console.log("Generating coding-agent shrinkwrap...");
 run("npm run shrinkwrap:coding-agent");
 console.log();
 
-// 5. Commit and tag
-console.log("Committing and tagging...");
+console.log("Committing and tagging release...");
 stageChangedFiles();
 run(`git commit -m "Release v${version}"`);
 run(`git tag v${version}`);
 console.log();
 
-// 6. Publish
-console.log("Publishing to npm...");
-run("npm run publish");
-console.log();
-
-// 7. Add new [Unreleased] sections
 console.log("Adding [Unreleased] sections for next cycle...");
 addUnreleasedSection();
 console.log();
 
-// 8. Commit
-console.log("Committing changelog updates...");
+console.log("Committing next-cycle changelog reset...");
 stageChangedFiles();
-run(`git commit -m "Add [Unreleased] section for next cycle"`);
+run('git commit -m "Add [Unreleased] section for next cycle"');
 console.log();
 
-// 9. Push
-console.log("Pushing to remote...");
+console.log("Pushing main and release tag...");
 run("git push origin main");
 run(`git push origin v${version}`);
 console.log();
 
 console.log(`=== Released v${version} ===`);
+console.log("GitHub Actions will build the mlens binaries and publish the GitHub Release assets.");

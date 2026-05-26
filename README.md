@@ -43,6 +43,22 @@ After install:
 mlens --help
 ```
 
+## Releases
+
+`mlens` is distributed through GitHub Releases only. We do not publish npm packages for end users.
+
+Release flow:
+
+```bash
+# 1. Build and smoke test local artifacts first
+npm run release:local -- --out /tmp/pi-local-release --force
+
+# 2. Cut the GitHub release tag + release commits
+npm run release:github -- 0.1.1
+```
+
+Pushing the `v0.1.1` tag triggers the `Build Binaries` GitHub Actions workflow, which publishes the `mlens-*` archives to the matching GitHub Release.
+
 ---
 
 # Pi Agent Harness Mono Repo
@@ -107,9 +123,9 @@ We treat npm dependency changes as reviewed code changes.
 - `.npmrc` sets `save-exact=true` and `min-release-age=2` to avoid same-day dependency releases during npm resolution.
 - `package-lock.json` is the dependency ground truth. Pre-commit blocks accidental lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1` is set.
 - `npm run check` verifies pinned direct deps, native TypeScript import compatibility, and the generated coding-agent shrinkwrap.
-- The published CLI package includes `packages/coding-agent/npm-shrinkwrap.json`, generated from the root lockfile, to pin transitive deps for npm users.
-- Release smoke tests use `npm run release:local` to build, pack, and create isolated npm and Bun installs outside the repo before publishing.
-- Local release installs, documented npm installs, and `pi update --self` use `--ignore-scripts` where supported.
+- `packages/coding-agent/npm-shrinkwrap.json` is still generated from the root lockfile so local release smoke tests can exercise deterministic packaged installs.
+- Release smoke tests use `npm run release:local` to build, pack, and create isolated Node-package and Bun-binary installs outside the repo before tagging a GitHub release.
+- Local release installs and `pi update --self` use `--ignore-scripts` where supported.
 - CI installs with `npm ci --ignore-scripts`, and a scheduled GitHub workflow runs `npm audit --omit=dev` plus `npm audit signatures --omit=dev`.
 - Shrinkwrap generation has an explicit allowlist for dependency lifecycle scripts; new lifecycle-script deps fail checks until reviewed.
 

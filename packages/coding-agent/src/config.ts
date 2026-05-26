@@ -295,9 +295,14 @@ export function getSelfUpdateUnavailableInstruction(
 	npmCommand?: string[],
 	updatePackageName = packageName,
 ): string {
+	const installCommandHint = getInstallCommandHint();
+	const releasesPageUrl = getReleasesPageUrl();
 	const method = detectInstallMethod();
 	if (method === "bun-binary") {
-		return `Download from: https://github.com/earendil-works/pi-mono/releases/latest`;
+		if (installCommandHint) {
+			return `Re-run: ${installCommandHint}\nOr download from: ${releasesPageUrl}`;
+		}
+		return `Download from: ${releasesPageUrl}`;
 	}
 	const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageName, npmCommand);
 	if (command) {
@@ -305,6 +310,9 @@ export function getSelfUpdateUnavailableInstruction(
 			return `This installation is managed by a global ${method} install, but the install path is not writable. Update it yourself with: ${command.display}`;
 		}
 		return `This installation is not managed by a global ${method} install. Update it with the package manager, wrapper, or source checkout that provides it.`;
+	}
+	if (installCommandHint) {
+		return `Re-run: ${installCommandHint}\nOr download from: ${releasesPageUrl}`;
 	}
 	return `Update ${updatePackageName} using the package manager, wrapper, or source checkout that provides this installation.`;
 }
@@ -449,6 +457,10 @@ export interface AppProfile {
 	helpTagline: string;
 	onboardingBlurb: string;
 	shareViewerUrl?: string;
+	latestReleaseApiUrl?: string;
+	latestReleaseApiAccept?: string;
+	releasesPageUrl?: string;
+	installCommand?: string;
 }
 
 const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson;
@@ -462,6 +474,9 @@ const DEFAULT_APP_PROFILE: AppProfile = {
 	exportNamePrefix: piConfigName || "pi",
 	helpTagline: "AI coding assistant with read, bash, edit, write tools",
 	onboardingBlurb: "Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.",
+	latestReleaseApiUrl: "https://pi.dev/api/latest-version",
+	latestReleaseApiAccept: "application/json",
+	releasesPageUrl: "https://github.com/earendil-works/pi-mono/releases/latest",
 	shareViewerUrl: "https://pi.dev/session/",
 };
 
@@ -512,6 +527,22 @@ export function getShareViewerUrl(gistId: string): string {
 	const baseUrl =
 		process.env.PI_SHARE_VIEWER_URL || getAppProfile().shareViewerUrl || DEFAULT_APP_PROFILE.shareViewerUrl;
 	return `${baseUrl}#${gistId}`;
+}
+
+export function getLatestReleaseApiUrl(): string {
+	return getAppProfile().latestReleaseApiUrl || DEFAULT_APP_PROFILE.latestReleaseApiUrl || "";
+}
+
+export function getLatestReleaseApiAccept(): string {
+	return getAppProfile().latestReleaseApiAccept || DEFAULT_APP_PROFILE.latestReleaseApiAccept || "application/json";
+}
+
+export function getReleasesPageUrl(): string {
+	return getAppProfile().releasesPageUrl || DEFAULT_APP_PROFILE.releasesPageUrl || "";
+}
+
+export function getInstallCommandHint(): string | undefined {
+	return getAppProfile().installCommand;
 }
 
 // =============================================================================

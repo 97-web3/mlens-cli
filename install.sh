@@ -9,7 +9,7 @@
 #   MLENS_INSTALL_DIR   Directory to extract the binary tree into. Default: $HOME/.mlens
 #   MLENS_BIN_DIR       Directory to place the `mlens` wrapper in. Default: /usr/local/bin
 #                       (falls back to $HOME/.local/bin if /usr/local/bin is not writable)
-#   MLENS_VERSION       Release tag to install (e.g. v0.1.0). Default: latest
+#   MLENS_VERSION       Release tag to install (e.g. v0.1.1). Default: latest
 
 set -euo pipefail
 

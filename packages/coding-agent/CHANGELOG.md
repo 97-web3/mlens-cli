@@ -7,6 +7,10 @@
 - Added optional `baseUrl` prompts to `/login` for OpenAI and Anthropic API-key auth, storing endpoint overrides in `models.json` while keeping API keys in `auth.json`.
 - Added a centered large-color startup brand banner for the Molian (`mlens`) interactive TUI.
 
+### Changed
+
+- Changed `mlens` distribution and update guidance to use GitHub Releases only, including GitHub-backed version checks and GitHub release/install hints instead of npm publish flows.
+
 ### Fixed
 
 - Fixed `RpcClient` to reject pending requests and consume stdin pipe errors when the child process exits unexpectedly ([#4764](https://github.com/earendil-works/pi/issues/4764)).

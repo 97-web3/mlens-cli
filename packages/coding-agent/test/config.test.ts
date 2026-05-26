@@ -392,4 +392,14 @@ describe("detectInstallMethod", () => {
 			"the install path is not writable",
 		);
 	});
+
+	test("points mlens bun binaries at the GitHub releases page", () => {
+		process.argv[1] = "/tmp/mlens";
+		setExecPath("/tmp/mlens");
+
+		expect(getSelfUpdateCommand("@earendil-works/pi-coding-agent")).toBeUndefined();
+		expect(getSelfUpdateUnavailableInstruction("@earendil-works/pi-coding-agent")).toContain(
+			"https://github.com/97-web3/mlens-cli/releases/latest",
+		);
+	});
 });

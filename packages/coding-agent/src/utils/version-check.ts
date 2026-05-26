@@ -1,6 +1,6 @@
+import { getLatestReleaseApiAccept, getLatestReleaseApiUrl } from "../config.ts";
 import { getPiUserAgent } from "./pi-user-agent.ts";
 
-const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 
 export interface LatestPiRelease {
@@ -8,6 +8,8 @@ export interface LatestPiRelease {
 	packageName?: string;
 	note?: string;
 }
+
+type ReleaseApiKind = "github" | "pi-dev";
 
 interface ParsedVersion {
 	major: number;
@@ -53,20 +55,42 @@ export function isNewerPackageVersion(candidateVersion: string, currentVersion: 
 	return candidateVersion.trim() !== currentVersion.trim();
 }
 
+function getReleaseApiKind(url: string): ReleaseApiKind {
+	return url.includes("api.github.com/") ? "github" : "pi-dev";
+}
+
 export async function getLatestPiRelease(
 	currentVersion: string,
 	options: { timeoutMs?: number } = {},
 ): Promise<LatestPiRelease | undefined> {
 	if (process.env.PI_SKIP_VERSION_CHECK || process.env.PI_OFFLINE) return undefined;
 
-	const response = await fetch(LATEST_VERSION_URL, {
+	const latestReleaseApiUrl = getLatestReleaseApiUrl();
+	const releaseApiKind = getReleaseApiKind(latestReleaseApiUrl);
+
+	const response = await fetch(latestReleaseApiUrl, {
 		headers: {
 			"User-Agent": getPiUserAgent(currentVersion),
-			accept: "application/json",
+			accept: getLatestReleaseApiAccept(),
 		},
 		signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_VERSION_CHECK_TIMEOUT_MS),
 	});
 	if (!response.ok) return undefined;
+
+	if (releaseApiKind === "github") {
+		const data = (await response.json()) as {
+			body?: unknown;
+			tag_name?: unknown;
+		};
+		if (typeof data.tag_name !== "string" || !data.tag_name.trim()) {
+			return undefined;
+		}
+		const note = typeof data.body === "string" && data.body.trim() ? data.body.trim() : undefined;
+		return {
+			version: data.tag_name.trim(),
+			...(note ? { note } : {}),
+		};
+	}
 
 	const data = (await response.json()) as {
 		packageName?: unknown;

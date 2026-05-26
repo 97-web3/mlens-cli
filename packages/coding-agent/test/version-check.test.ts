@@ -9,6 +9,7 @@ import {
 
 const originalSkipVersionCheck = process.env.PI_SKIP_VERSION_CHECK;
 const originalOffline = process.env.PI_OFFLINE;
+const originalArgv1 = process.argv[1];
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -21,6 +22,11 @@ afterEach(() => {
 		delete process.env.PI_OFFLINE;
 	} else {
 		process.env.PI_OFFLINE = originalOffline;
+	}
+	if (originalArgv1 === undefined) {
+		process.argv.splice(1, 1);
+	} else {
+		process.argv[1] = originalArgv1;
 	}
 });
 
@@ -52,6 +58,26 @@ describe("version checks", () => {
 				headers: expect.objectContaining({
 					"User-Agent": expect.stringMatching(/^pi\/1\.2\.3 /),
 					accept: "application/json",
+				}),
+			}),
+		);
+	});
+
+	it("uses the GitHub releases api for mlens", async () => {
+		process.argv[1] = "/tmp/mlens";
+		const fetchMock = vi.fn(async () => Response.json({ body: " GitHub note ", tag_name: "v0.1.2" }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(getLatestPiRelease("0.1.1")).resolves.toEqual({
+			note: "GitHub note",
+			version: "v0.1.2",
+		});
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://api.github.com/repos/97-web3/mlens-cli/releases/latest",
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					accept: "application/vnd.github+json",
+					"User-Agent": expect.stringMatching(/^mlens\/0\.1\.1 /),
 				}),
 			}),
 		);

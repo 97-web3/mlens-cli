@@ -72,7 +72,7 @@ function getPackageCommandUsage(command: PackageCommand): string {
 		case "remove":
 			return `${APP_NAME} remove <source> [-l]`;
 		case "update":
-			return `${APP_NAME} update [source|self|pi] [--self] [--extensions] [--extension <source>] [--force]`;
+			return `${APP_NAME} update [source|self|${APP_NAME}] [--self] [--extensions] [--extension <source>] [--force]`;
 		case "list":
 			return `${APP_NAME} list`;
 	}
@@ -130,7 +130,7 @@ Options:
 Short forms:
   ${APP_NAME} update                Update ${APP_NAME} and all extensions
   ${APP_NAME} update <source>       Update one package
-  ${APP_NAME} update pi             Update ${APP_NAME} only (self works as alias to pi)
+  ${APP_NAME} update ${APP_NAME}    Update ${APP_NAME} only (self works as alias to ${APP_NAME})
 `);
 			return;
 
@@ -253,7 +253,7 @@ function parsePackageCommand(args: string[]): PackageCommandOptions | undefined 
 			}
 			updateTarget = { type: "extensions", source: extensionFlagSource };
 		} else if (source) {
-			const sourceIsSelf = source === "self" || source === "pi";
+			const sourceIsSelf = source === "self" || source === APP_NAME;
 			if (sourceIsSelf) {
 				updateTarget = extensionsFlag ? { type: "all" } : { type: "self" };
 			} else {
