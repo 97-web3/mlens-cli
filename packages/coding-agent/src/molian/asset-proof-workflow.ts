@@ -1020,7 +1020,7 @@ export async function exportMolianAssetProofReport(
 	const finalOutputPath = resolveOutputPath(cwd, options.outputPath, report);
 	options.onProgress?.({
 		stage: "writing_file",
-		message: `Writing report file to ${finalOutputPath}...`,
+		message: `Writing report file to ${finalOutputPath}`,
 		snapshot: buildProgressSnapshot(report),
 	});
 	await mkdir(dirname(finalOutputPath), { recursive: true });

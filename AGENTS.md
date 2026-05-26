@@ -114,6 +114,15 @@ Attribution:
 
 **Lockstep versioning**: all packages share one version, and Git tags are `v<version>` (for example `v0.1.1`).
 
+**Project-specific release skill**: `.pi/skills/release-mlens-github/SKILL.md`
+
+Use that skill when the user asks to:
+- release or publish `mlens`
+- cut a new `v0.1.x` tag
+- verify the `Build Binaries` workflow or GitHub Release assets
+
+Do not use any legacy npm publishing flow in this repository. `mlens` ships through GitHub Releases only.
+
 1. **Update CHANGELOGs**: ask the user whether they ran the `/cl` prompt on the latest commit on `main`. If not, they must run `/cl` first to audit and update each package's `[Unreleased]` section before releasing.
 
 2. **Local smoke test**: build an unpublished release and smoke test from outside the repo (so it can't resolve workspace files):
@@ -144,9 +153,27 @@ Attribution:
    The script accepts `0.1.1` or `v0.1.1`, updates all workspace versions, finalizes changelogs, commits the release, tags `v0.1.1`, adds fresh `[Unreleased]` sections, commits the reset, and pushes `main` plus the tag.
 
 4. **Verify GitHub Release publication**:
+   - Watch the workflow:
+     ```bash
+     gh run list --workflow "Build Binaries" --limit 5
+     gh run watch <run-id>
+     ```
+   - Inspect the release payload:
+     ```bash
+     gh release view v0.1.1 --json assets,name,tagName,url
+     ```
    - Wait for the `Build Binaries` GitHub Actions workflow triggered by the pushed tag to complete.
    - Confirm the GitHub Release for `v0.1.1` exists and includes the expected `mlens-*` archives.
+   - Expected assets:
+     - `mlens-darwin-arm64.tar.gz`
+     - `mlens-darwin-x64.tar.gz`
+     - `mlens-linux-arm64.tar.gz`
+     - `mlens-linux-x64.tar.gz`
+     - `mlens-windows-arm64.zip`
+     - `mlens-windows-x64.zip`
    - If the workflow or release asset upload fails, fix the issue on `main` and cut a new version. Do not reuse a broken tag.
+   - If `release:github` stops after changelog/version updates but before tagging, inspect `git status`, finish the staged release commit manually, then continue from tag/push.
+   - GitHub Actions cache warnings are non-blocking. Binary build failures or missing release assets are blocking.
 
 ## User Override
 

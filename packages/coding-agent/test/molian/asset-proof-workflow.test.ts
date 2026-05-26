@@ -280,12 +280,10 @@ describe("molian asset proof workflow", () => {
 			{ stage: "agent_summary", message: "Applying agent summary guard..." },
 			{ stage: "rendering_html", message: "Rendering HTML report..." },
 		]);
-		expect(progressEvents[5]).toEqual(
-			expect.objectContaining({
-				stage: "writing_file",
-				message: expect.stringContaining("Writing report file to"),
-			}),
-		);
+		expect(progressEvents[5]).toEqual({
+			stage: "writing_file",
+			message: `Writing report file to ${result.outputPath}`,
+		});
 	});
 
 	it("marks TRON native flow coverage as sampled", async () => {
