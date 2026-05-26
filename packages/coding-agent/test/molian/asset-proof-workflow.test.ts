@@ -5,8 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../../src/core/auth-storage.ts";
 import {
 	buildMolianAssetProofReport,
+	buildMolianAssetProofReportFromCollectedData,
+	collectMolianAssetProofData,
 	exportMolianAssetProofReport,
 	type MolianAssetProofNarrator,
+	writeMolianAssetProofReportHtml,
 } from "../../src/molian/asset-proof-workflow.ts";
 
 function createTempDir(): string {
@@ -286,6 +289,82 @@ describe("molian asset proof workflow", () => {
 				message: expect.stringContaining("Writing report file to"),
 			}),
 		);
+	});
+
+	it("supports staged collect, build, and write phases", async () => {
+		const tempDir = createTempDir();
+		const collectedData = await collectMolianAssetProofData({
+			address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+			chain: "btc",
+			generatedAt: "2026-01-30T00:00:00.000Z",
+			dataAsOf: "2026-01-30T00:00:00.000Z",
+			providerOverrides: {
+				btcOverview: async () => ({
+					chain: "btc",
+					address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+					balanceSummary: { nativeSymbol: "BTC", nativeBalance: "1.5" },
+					activitySummary: {
+						txCount: 3,
+						firstSeenAt: "2020-10-03T00:00:00.000Z",
+						lastSeenAt: "2025-01-03T00:00:00.000Z",
+						recentActivityWindow: "2020-10-03T00:00:00.000Z -> 2025-01-03T00:00:00.000Z",
+					},
+					transferSummary: {
+						totalIn: "1.75",
+						totalOut: "0.25",
+						largeTransfers: [
+							{
+								timestamp: "2020-10-03T00:00:00.000Z",
+								amount: "1.0",
+								symbol: "BTC",
+								direction: "in",
+							},
+						],
+					},
+					counterparties: [{ address: "bc1source", txCount: 1, relation: "recent transaction counterparty" }],
+					labels: [],
+					sourceMeta: {
+						provider: "mempool.space",
+						partial: true,
+						notes: ["Recent transaction samples are partial."],
+					},
+				}),
+				marketPrice: async () => ({
+					currentPriceUsd: "76000",
+					priceSource: "binance",
+					priceStatus: "live",
+					quoteSymbolNormalized: "BTCUSDT",
+				}),
+			},
+		});
+
+		const report = await buildMolianAssetProofReportFromCollectedData({
+			collectedData,
+			providerOverrides: {
+				marketPrice: async () => ({
+					currentPriceUsd: "76000",
+					priceSource: "binance",
+					priceStatus: "live",
+					quoteSymbolNormalized: "BTCUSDT",
+				}),
+			},
+			summaryPatch: {
+				coreConclusion: "该地址在公开链上数据中存在较明确的 BTC 持仓线索。",
+			},
+		});
+		const result = await writeMolianAssetProofReportHtml({
+			report,
+			cwd: tempDir,
+		});
+
+		await access(result.outputPath);
+		const html = await readFile(result.outputPath, "utf-8");
+
+		expect(collectedData.addressProfile.totalTxCount).toBe(3);
+		expect(report.executiveSummary.coreConclusion).toBe("该地址在公开链上数据中存在较明确的 BTC 持仓线索。");
+		expect(report.assetProofItems[0]?.currentValueUsd).toBe("114000");
+		expect(result.outputPath).toContain("/molian-reports/");
+		expect(html).toContain("BTC");
 	});
 
 	it("marks TRON native flow coverage as sampled", async () => {

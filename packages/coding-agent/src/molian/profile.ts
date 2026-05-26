@@ -7,5 +7,6 @@ export const MOLIAN_APP_PROFILE: AppProfile = {
 	configDirName: ".molian",
 	exportNamePrefix: "mlens",
 	helpTagline: "墨链链上公共地址分析 Agent",
-	onboardingBlurb: "墨链链镜会优先基于链上工具收集事实。输入 /report <address> <chain> 生成单地址单链资产证明报告。",
+	onboardingBlurb:
+		"墨链链镜会优先基于链上工具收集事实。可用 /report <address> <chain> 或自然语言发起单地址单链资产证明报告流程。",
 };
