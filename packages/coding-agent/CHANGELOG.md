@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an agent-orchestrated `mlens` report workflow that stages collection, report building, and HTML writing through dedicated Molian tools and prompt transforms.
+
+### Fixed
+
+- Fixed the report workflow prompt to avoid repeating the conclusion statement in the generated instructions.
+
 ## [0.1.1] - 2026-05-26
 
 ### Added
