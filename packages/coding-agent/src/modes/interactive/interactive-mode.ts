@@ -55,12 +55,14 @@ import {
 	getAuthPath,
 	getDebugLogPath,
 	getDocsPath,
+	getModelsPath,
 	getShareViewerUrl,
 	ONBOARDING_BLURB,
 	VERSION,
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
+import { collectApiKeyLoginConfig } from "../../core/api-key-login.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -76,6 +78,7 @@ import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/htt
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
+import { ModelsConfigStorage, type ProviderBaseUrlUpdateResult } from "../../core/models-config-storage.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
@@ -4614,6 +4617,7 @@ export class InteractiveMode {
 		providerName: string,
 		authType: "oauth" | "api_key",
 		previousModel: Model<any> | undefined,
+		savedCredentialsMessage = `Credentials saved to ${getAuthPath()}`,
 	): Promise<void> {
 		this.session.modelRegistry.refresh();
 
@@ -4643,17 +4647,30 @@ export class InteractiveMode {
 					}
 				}
 			}
+		} else if (previousModel?.provider === providerId) {
+			const refreshedModel = this.session.modelRegistry.find(providerId, previousModel.id);
+			if (!refreshedModel) {
+				selectionError = `${actionLabel}, but the current model "${previousModel.id}" is no longer available after refreshing provider settings. Use /model to select a model.`;
+			} else {
+				try {
+					await this.session.setModel(refreshedModel);
+					selectedModel = refreshedModel;
+				} catch (error: unknown) {
+					const errorMessage = error instanceof Error ? error.message : String(error);
+					selectionError = `${actionLabel}, but refreshing the current model "${previousModel.id}" failed: ${errorMessage}. Use /model to reselect the model.`;
+				}
+			}
 		}
 
 		await this.updateAvailableProviderCount();
 		this.footer.invalidate();
 		this.updateEditorBorderColor();
 		if (selectedModel) {
-			this.showStatus(`${actionLabel}. Selected ${selectedModel.id}. Credentials saved to ${getAuthPath()}`);
+			this.showStatus(`${actionLabel}. Selected ${selectedModel.id}. ${savedCredentialsMessage}`);
 			void this.maybeWarnAboutAnthropicSubscriptionAuth(selectedModel);
 			this.checkDaxnutsEasterEgg(selectedModel);
 		} else {
-			this.showStatus(`${actionLabel}. Credentials saved to ${getAuthPath()}`);
+			this.showStatus(`${actionLabel}. ${savedCredentialsMessage}`);
 			if (selectionError) {
 				this.showError(selectionError);
 			} else {
@@ -4715,22 +4732,59 @@ export class InteractiveMode {
 		};
 
 		try {
-			const apiKey = (await dialog.showPrompt("Enter API key:")).trim();
-			if (!apiKey) {
-				throw new Error("API key cannot be empty.");
+			const loginConfig = await collectApiKeyLoginConfig(providerId, (message, placeholder) =>
+				dialog.showPrompt(message, placeholder),
+			);
+			let baseUrlResult: ProviderBaseUrlUpdateResult | undefined;
+			if (loginConfig.baseUrlAction !== "skip") {
+				const modelsConfigStorage = new ModelsConfigStorage(getModelsPath());
+				baseUrlResult = modelsConfigStorage.setProviderBaseUrl(
+					providerId,
+					loginConfig.baseUrlAction === "set" ? loginConfig.baseUrl : undefined,
+				);
 			}
 
-			this.session.modelRegistry.authStorage.set(providerId, { type: "api_key", key: apiKey });
+			const authStorage = this.session.modelRegistry.authStorage;
+			authStorage.drainErrors();
+			authStorage.set(providerId, { type: "api_key", key: loginConfig.apiKey });
+			const authErrors = authStorage.drainErrors();
+			if (authErrors.length > 0) {
+				throw authErrors[0];
+			}
 
 			restoreEditor();
-			await this.completeProviderAuthentication(providerId, providerName, "api_key", previousModel);
+			await this.completeProviderAuthentication(
+				providerId,
+				providerName,
+				"api_key",
+				previousModel,
+				this.getApiKeyLoginSavedCredentialsMessage(baseUrlResult),
+			);
 		} catch (error: unknown) {
 			restoreEditor();
 			const errorMsg = error instanceof Error ? error.message : String(error);
 			if (errorMsg !== "Login cancelled") {
-				this.showError(`Failed to save API key for ${providerName}: ${errorMsg}`);
+				this.showError(`Failed to configure ${providerName}: ${errorMsg}`);
 			}
 		}
+	}
+
+	private getApiKeyLoginSavedCredentialsMessage(baseUrlResult?: ProviderBaseUrlUpdateResult): string {
+		const parts = [`Credentials saved to ${getAuthPath()}`];
+
+		if (!baseUrlResult) {
+			return parts[0]!;
+		}
+
+		if (baseUrlResult.action === "set") {
+			parts.push(`endpoint override saved to ${baseUrlResult.path}`);
+		} else if (baseUrlResult.action === "cleared") {
+			parts.push(`endpoint override cleared in ${baseUrlResult.path}`);
+		} else {
+			parts.push("using official endpoint");
+		}
+
+		return parts.join("; ");
 	}
 
 	private showOAuthLoginSelect(dialog: LoginDialogComponent, prompt: OAuthSelectPrompt): Promise<string | undefined> {

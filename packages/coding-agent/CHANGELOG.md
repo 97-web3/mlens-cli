@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional `baseUrl` prompts to `/login` for OpenAI and Anthropic API-key auth, storing endpoint overrides in `models.json` while keeping API keys in `auth.json`.
+
 ### Fixed
 
 - Fixed `RpcClient` to reject pending requests and consume stdin pipe errors when the child process exits unexpectedly ([#4764](https://github.com/earendil-works/pi/issues/4764)).

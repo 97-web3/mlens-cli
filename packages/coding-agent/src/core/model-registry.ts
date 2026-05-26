@@ -201,9 +201,9 @@ const ModelsConfigSchema = Type.Object({
 	providers: Type.Record(Type.String(), ProviderConfigSchema),
 });
 
-const validateModelsConfig = Compile(ModelsConfigSchema);
+export const validateModelsConfig = Compile(ModelsConfigSchema);
 
-type ModelsConfig = Static<typeof ModelsConfigSchema>;
+export type ModelsConfig = Static<typeof ModelsConfigSchema>;
 
 function formatValidationPath(error: TLocalizedValidationError): string {
 	if (error.keyword === "required") {
@@ -223,6 +223,50 @@ function stripJsonComments(input: string): string {
 	return input
 		.replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (m) => (m[0] === '"' ? m : ""))
 		.replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (m, tail) => tail ?? (m[0] === '"' ? m : ""));
+}
+
+export type ParsedModelsConfigResult =
+	| {
+			ok: true;
+			config: ModelsConfig;
+	  }
+	| {
+			ok: false;
+			error: string;
+	  };
+
+export function parseModelsConfigContent(content: string, modelsJsonPath: string): ParsedModelsConfigResult {
+	try {
+		const parsed = JSON.parse(stripJsonComments(content)) as unknown;
+
+		if (!validateModelsConfig.Check(parsed)) {
+			const errors =
+				validateModelsConfig
+					.Errors(parsed)
+					.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
+					.join("\n") || "Unknown schema error";
+			return {
+				ok: false,
+				error: `Invalid models.json schema:\n${errors}\n\nFile: ${modelsJsonPath}`,
+			};
+		}
+
+		return {
+			ok: true,
+			config: parsed as ModelsConfig,
+		};
+	} catch (error) {
+		if (error instanceof SyntaxError) {
+			return {
+				ok: false,
+				error: `Failed to parse models.json: ${error.message}\n\nFile: ${modelsJsonPath}`,
+			};
+		}
+		return {
+			ok: false,
+			error: `Failed to load models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${modelsJsonPath}`,
+		};
+	}
 }
 
 /** Provider override config (baseUrl, compat) without request auth/headers */
@@ -260,6 +304,54 @@ interface CustomModelsResult {
 
 function emptyCustomModelsResult(error?: string): CustomModelsResult {
 	return { models: [], overrides: new Map(), modelOverrides: new Map(), error };
+}
+
+export function validateModelsConfigSemantics(config: ModelsConfig): void {
+	const builtInProviders = new Set<string>(getProviders());
+
+	for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+		const isBuiltIn = builtInProviders.has(providerName);
+		const hasProviderApi = !!providerConfig.api;
+		const models = providerConfig.models ?? [];
+		const hasModelOverrides = providerConfig.modelOverrides && Object.keys(providerConfig.modelOverrides).length > 0;
+
+		if (models.length === 0) {
+			// Override-only config: needs baseUrl, headers, compat, modelOverrides, or some combination.
+			if (!providerConfig.baseUrl && !providerConfig.headers && !providerConfig.compat && !hasModelOverrides) {
+				throw new Error(
+					`Provider ${providerName}: must specify "baseUrl", "headers", "compat", "modelOverrides", or "models".`,
+				);
+			}
+		} else if (!isBuiltIn) {
+			// Non-built-in providers with custom models require endpoint + auth.
+			if (!providerConfig.baseUrl) {
+				throw new Error(`Provider ${providerName}: "baseUrl" is required when defining custom models.`);
+			}
+			if (!providerConfig.apiKey) {
+				throw new Error(`Provider ${providerName}: "apiKey" is required when defining custom models.`);
+			}
+		}
+		// Built-in providers with custom models: baseUrl/apiKey/api are optional,
+		// inherited from built-in models. Auth comes from env vars / auth storage.
+
+		for (const modelDef of models) {
+			const hasModelApi = !!modelDef.api;
+
+			if (!hasProviderApi && !hasModelApi && !isBuiltIn) {
+				throw new Error(
+					`Provider ${providerName}, model ${modelDef.id}: no "api" specified. Set at provider or model level.`,
+				);
+			}
+			// For built-in providers, api is optional — inherited from built-in models.
+
+			if (!modelDef.id) throw new Error(`Provider ${providerName}: model missing "id"`);
+			// Validate contextWindow/maxTokens only if provided (they have defaults)
+			if (modelDef.contextWindow !== undefined && modelDef.contextWindow <= 0)
+				throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindow`);
+			if (modelDef.maxTokens !== undefined && modelDef.maxTokens <= 0)
+				throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid maxTokens`);
+		}
+	}
 }
 
 function mergeCompat(
@@ -463,21 +555,13 @@ export class ModelRegistry {
 
 		try {
 			const content = readFileSync(modelsJsonPath, "utf-8");
-			const parsed = JSON.parse(stripJsonComments(content)) as unknown;
-
-			if (!validateModelsConfig.Check(parsed)) {
-				const errors =
-					validateModelsConfig
-						.Errors(parsed)
-						.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
-						.join("\n") || "Unknown schema error";
-				return emptyCustomModelsResult(`Invalid models.json schema:\n${errors}\n\nFile: ${modelsJsonPath}`);
+			const parsed = parseModelsConfigContent(content, modelsJsonPath);
+			if (!parsed.ok) {
+				return emptyCustomModelsResult(parsed.error);
 			}
 
-			const config = parsed as ModelsConfig;
-
-			// Additional validation
-			this.validateConfig(config);
+			const config = parsed.config;
+			validateModelsConfigSemantics(config);
 
 			const overrides = new Map<string, ProviderOverride>();
 			const modelOverrides = new Map<string, Map<string, ModelOverride>>();
@@ -508,55 +592,6 @@ export class ModelRegistry {
 			return emptyCustomModelsResult(
 				`Failed to load models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${modelsJsonPath}`,
 			);
-		}
-	}
-
-	private validateConfig(config: ModelsConfig): void {
-		const builtInProviders = new Set<string>(getProviders());
-
-		for (const [providerName, providerConfig] of Object.entries(config.providers)) {
-			const isBuiltIn = builtInProviders.has(providerName);
-			const hasProviderApi = !!providerConfig.api;
-			const models = providerConfig.models ?? [];
-			const hasModelOverrides =
-				providerConfig.modelOverrides && Object.keys(providerConfig.modelOverrides).length > 0;
-
-			if (models.length === 0) {
-				// Override-only config: needs baseUrl, headers, compat, modelOverrides, or some combination.
-				if (!providerConfig.baseUrl && !providerConfig.headers && !providerConfig.compat && !hasModelOverrides) {
-					throw new Error(
-						`Provider ${providerName}: must specify "baseUrl", "headers", "compat", "modelOverrides", or "models".`,
-					);
-				}
-			} else if (!isBuiltIn) {
-				// Non-built-in providers with custom models require endpoint + auth.
-				if (!providerConfig.baseUrl) {
-					throw new Error(`Provider ${providerName}: "baseUrl" is required when defining custom models.`);
-				}
-				if (!providerConfig.apiKey) {
-					throw new Error(`Provider ${providerName}: "apiKey" is required when defining custom models.`);
-				}
-			}
-			// Built-in providers with custom models: baseUrl/apiKey/api are optional,
-			// inherited from built-in models. Auth comes from env vars / auth storage.
-
-			for (const modelDef of models) {
-				const hasModelApi = !!modelDef.api;
-
-				if (!hasProviderApi && !hasModelApi && !isBuiltIn) {
-					throw new Error(
-						`Provider ${providerName}, model ${modelDef.id}: no "api" specified. Set at provider or model level.`,
-					);
-				}
-				// For built-in providers, api is optional — inherited from built-in models.
-
-				if (!modelDef.id) throw new Error(`Provider ${providerName}: model missing "id"`);
-				// Validate contextWindow/maxTokens only if provided (they have defaults)
-				if (modelDef.contextWindow !== undefined && modelDef.contextWindow <= 0)
-					throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindow`);
-				if (modelDef.maxTokens !== undefined && modelDef.maxTokens <= 0)
-					throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid maxTokens`);
-			}
 		}
 	}
 

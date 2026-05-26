@@ -46,6 +46,8 @@ export ANTHROPIC_API_KEY=sk-ant-...
 pi
 ```
 
+For `openai` and `anthropic`, `/login` also prompts for an optional `baseUrl`. Non-empty values are stored as provider overrides in `~/.pi/agent/models.json`. Leave the prompt blank to use the official endpoint.
+
 | Provider | Environment Variable | `auth.json` key |
 |----------|----------------------|------------------|
 | Anthropic | `ANTHROPIC_API_KEY` | `anthropic` |
