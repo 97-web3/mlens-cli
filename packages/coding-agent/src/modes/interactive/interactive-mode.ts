@@ -220,6 +220,17 @@ export function isApiKeyLoginProvider(
 	return !oauthProviderIds.has(providerId);
 }
 
+export function filterLoginProviderOptionsForApp(
+	options: AuthSelectorProvider[],
+	appName: string = APP_NAME,
+): AuthSelectorProvider[] {
+	if (appName !== "mlens") {
+		return options;
+	}
+
+	return options.filter((option) => option.authType !== "api_key" || option.id === "openai");
+}
+
 /**
  * Options for InteractiveMode initialization.
  */
@@ -4479,8 +4490,8 @@ export class InteractiveMode {
 			});
 		}
 
-		const filteredOptions = authType ? options.filter((option) => option.authType === authType) : options;
-		return filteredOptions.sort((a, b) => a.name.localeCompare(b.name));
+		const scopedOptions = authType ? options.filter((option) => option.authType === authType) : options;
+		return filterLoginProviderOptionsForApp(scopedOptions).sort((a, b) => a.name.localeCompare(b.name));
 	}
 
 	private getLogoutProviderOptions(): AuthSelectorProvider[] {
