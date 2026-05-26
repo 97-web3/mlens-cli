@@ -5,6 +5,7 @@ import {
 	runMolianChainConfigWizard,
 } from "./chain-config.ts";
 import { handleMolianReportCommand } from "./commands/report.ts";
+import { MOLIAN_REPORT_PROGRESS_CUSTOM_TYPE, renderMolianReportProgressMessage } from "./report-progress.ts";
 import { createGetAddressRiskSignalsTool } from "./tools/get-address-risk-signals.ts";
 import { createGetBtcAddressOverviewTool } from "./tools/get-btc-address-overview.ts";
 import { createGetEvmAddressOverviewTool } from "./tools/get-evm-address-overview.ts";
@@ -13,10 +14,12 @@ import { createGetTronAddressOverviewTool } from "./tools/get-tron-address-overv
 import { createResolveChainTool } from "./tools/resolve-chain.ts";
 
 function molianExtension(pi: ExtensionAPI): void {
+	pi.registerMessageRenderer(MOLIAN_REPORT_PROGRESS_CUSTOM_TYPE, renderMolianReportProgressMessage);
+
 	pi.registerCommand("report", {
 		description: "Generate an HTML asset-proof report: /report <address> <chain> [output.html]",
 		handler: async (args, ctx) => {
-			await handleMolianReportCommand(args, ctx);
+			await handleMolianReportCommand(pi, args, ctx);
 		},
 	});
 

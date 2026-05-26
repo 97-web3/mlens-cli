@@ -12,6 +12,7 @@ describe("molian asset proof report template", () => {
 			chain: "eth",
 		});
 
+		expect(report.reportMeta).not.toHaveProperty("subjectName");
 		expect(report.reportMeta.targetAddress).toBe("0x464e146614D53B675B74cD04d2d727b2c04aeABa");
 		expect(report.reportMeta.chain).toBe("eth");
 		expect(report.reportMeta.reportType).toBe("asset_proof");
@@ -19,7 +20,7 @@ describe("molian asset proof report template", () => {
 		expect(report.executiveSummary.topFindings).toEqual([]);
 		expect(report.assetProofItems).toEqual([]);
 		expect(report.participationItems).toEqual([]);
-		expect(report.limitations.cannotConcludeItems).toEqual([]);
+		expect(report.reportMeta.sourceSummary).toBe("");
 	});
 
 	it("builds a stable html filename per address and chain", () => {
@@ -33,17 +34,16 @@ describe("molian asset proof report template", () => {
 		);
 	});
 
-	it("renders a standalone html report with required sections and evidence links", () => {
+	it("renders filtered asset proof sections with current price and usd values", () => {
 		const report = createMolianAssetProofReportTemplate({
 			targetAddress: "0x464e146614D53B675B74cD04d2d727b2c04aeABa",
 			chain: "eth",
-			subjectName: "Sample Subject",
 		});
 
 		report.executiveSummary.overallGrade = "strong_support";
 		report.executiveSummary.coreConclusion = "该地址在 ETH 主链上存在较明确的历史资产持有证据，可支持资产证明方向。";
 		report.executiveSummary.topFindings = [
-			"ETH 主链活跃时间早于辅助链",
+			"首次活跃时间：2020-10-03T00:00:00.000Z",
 			"存在可识别的 DeFi 参与记录",
 			"曾出现可见峰值余额",
 		];
@@ -62,6 +62,14 @@ describe("molian asset proof report template", () => {
 			peakBalanceAt: "2020-09-30T00:00:00.000Z",
 			highHoldingPeriod: "2020 Q4",
 			historicalShareOfPortfolio: "核心资产",
+			currentPriceUsd: "2500",
+			currentValueUsd: "550000",
+			priceSource: "binance",
+			priceStatus: "live",
+			quoteSymbolNormalized: "ETHUSDT",
+			historicalTotalInText: "51 ETH",
+			historicalTotalOutText: "1 ETH",
+			flowCoverage: "complete",
 			proofSummary: "早期持有并在重要时期形成高峰余额。",
 			sampleEvidenceRows: [
 				{
@@ -78,6 +86,48 @@ describe("molian asset proof report template", () => {
 					note: "来自早期个人地址的启动资金",
 				},
 			],
+		});
+		report.assetProofItems.push({
+			assetSymbol: "TLP",
+			assetCategory: "other",
+			proofGrade: "weak_support",
+			firstSeenAt: "2020-03-12T04:11:48.000Z",
+			firstAcquiredAt: "2020-03-12T04:11:48.000Z",
+			peakBalance: "1 TLP",
+			peakBalanceAt: "2020-03-12T04:11:48.000Z",
+			highHoldingPeriod: "2020 Q1",
+			historicalShareOfPortfolio: "脚本回放样本估算",
+			currentPriceUsd: "0",
+			currentValueUsd: "0",
+			priceSource: "unavailable",
+			priceStatus: "unavailable",
+			quoteSymbolNormalized: "TLPUSDT",
+			historicalTotalInText: "1 TLP",
+			historicalTotalOutText: "0 TLP",
+			flowCoverage: "sampled",
+			proofSummary: "链上样本不足且未获取到交易所报价。",
+			sampleEvidenceRows: [],
+		});
+		report.assetProofItems.push({
+			assetSymbol: "USDT",
+			assetCategory: "stablecoin",
+			proofGrade: "moderate_support",
+			firstSeenAt: "2021-01-02T00:00:00.000Z",
+			firstAcquiredAt: "2021-01-02T00:00:00.000Z",
+			peakBalance: "100 USDT",
+			peakBalanceAt: "2021-01-02T00:00:00.000Z",
+			highHoldingPeriod: "2021 Q1",
+			historicalShareOfPortfolio: "稳定币周转",
+			currentPriceUsd: "1",
+			currentValueUsd: "100",
+			priceSource: "stablecoin_fallback",
+			priceStatus: "fallback",
+			quoteSymbolNormalized: "USDT/USD",
+			historicalTotalInText: "100 USDT",
+			historicalTotalOutText: "40 USDT",
+			flowCoverage: "complete",
+			proofSummary: "稳定币历史转账样本可见。",
+			sampleEvidenceRows: [],
 		});
 		report.participationItems.push({
 			projectName: "Uniswap LP",
@@ -120,9 +170,7 @@ describe("molian asset proof report template", () => {
 			explorerUrl: "https://etherscan.io/tx/0xabc",
 			note: "可点击跳转原始交易",
 		});
-		report.limitations.coverageLimitations = ["仅覆盖公开链上可见样本"];
-		report.limitations.cannotConcludeItems = ["无法仅凭当前样本确认链下资产规模"];
-		report.appendix.dataSources = ["Etherscan", "DeFi protocol event samples"];
+		report.reportMeta.sourceSummary = "etherscan, binance_spot";
 
 		const html = renderMolianAssetProofReportHtml(report);
 
@@ -130,24 +178,49 @@ describe("molian asset proof report template", () => {
 		expect(html).toContain("资产证明审查报告");
 		expect(html).toContain("报告摘要");
 		expect(html).toContain("量化快照");
+		expect(html).toContain("资产");
+		expect(html).toContain("历史流入");
+		expect(html).toContain("历史流出");
+		expect(html).toContain("口径");
 		expect(html).toContain("地址基本信息");
 		expect(html).toContain("早期持仓证明");
 		expect(html).toContain("历史余额与峰值证明");
 		expect(html).toContain("项目参与与收益证明");
-		expect(html).toContain("关键证据样本");
-		expect(html).toContain("结论与局限");
 		expect(html).toContain("强支持");
-		expect(html).toContain('href="https://etherscan.io/tx/0xabc"');
 		expect(html).toContain("Uniswap LP");
-		expect(html).toContain("最终简结");
+		expect(html).toContain("首次活跃时间：2020-10-03 00:00:00");
+		expect(html).toContain("2020-10-03 00:00:00");
+		expect(html).toContain("2020-09-30 00:00:00");
+		expect(html).not.toContain("2020-10-03T00:00:00.000Z");
+		expect(html).not.toContain("2020-09-30T00:00:00.000Z");
+		expect(html).toContain("$2,500.00");
+		expect(html).toContain("$550,000.00");
+		expect(html).toContain("51 ETH");
+		expect(html).toContain("1 ETH");
+		expect(html).toContain("100 USDT");
+		expect(html).toContain("40 USDT");
+		expect(html).toContain("完整历史");
+		expect(html).toContain("样本历史");
+		expect(html).toContain("TLP");
+		expect(html).not.toContain("<h3>TLP</h3>");
+		expect(html).not.toContain("结论与局限");
+		expect(html).not.toContain("附录");
+		expect(html).not.toContain("审查对象");
+		expect(html).not.toContain('<h2 class="section-title">关键证据样本</h2>');
+		expect(html).not.toContain("样本标题");
+		expect(html).not.toContain("首次入金样本");
+		expect(html).not.toContain("LP 退出样本");
+		expect(html).not.toContain('href="https://etherscan.io/tx/0xabc"');
+		expect(html).not.toContain('href="https://etherscan.io/tx/0xdef"');
+		expect(html).toContain("<title>资产证明审查报告 - 0x464e146614D53B675B74cD04d2d727b2c04aeABa</title>");
 	});
 
 	it("escapes unsafe html and shows placeholders for empty sections", () => {
 		const report = createMolianAssetProofReportTemplate({
 			targetAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
 			chain: "tron",
-			subjectName: "<script>alert(1)</script>",
 		});
+		report.executiveSummary.coreConclusion = "<script>alert(1)</script>";
 		report.executiveSummary.topFindings = ["持有 <b>TRX</b>"];
 
 		const html = renderMolianAssetProofReportHtml(report);
@@ -155,6 +228,7 @@ describe("molian asset proof report template", () => {
 		expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
 		expect(html).toContain("&lt;b&gt;TRX&lt;/b&gt;");
 		expect(html).toContain("未发现可支持证据");
-		expect(html).toContain("当前无法判断");
+		expect(html).toContain("暂无资产流水统计");
+		expect(html).not.toContain("结论与局限");
 	});
 });

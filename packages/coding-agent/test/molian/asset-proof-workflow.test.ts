@@ -114,6 +114,32 @@ describe("molian asset proof workflow", () => {
 			authStorage,
 			dataAsOf: "2026-01-29T00:00:00.000Z",
 			generatedAt: "2026-01-30T00:00:00.000Z",
+			providerOverrides: {
+				marketPrice: async (symbol) => {
+					if (symbol === "ETH") {
+						return {
+							currentPriceUsd: "2500",
+							priceSource: "binance",
+							priceStatus: "live",
+							quoteSymbolNormalized: "ETHUSDT",
+						};
+					}
+					if (symbol === "USDT") {
+						return {
+							currentPriceUsd: "1",
+							priceSource: "stablecoin_fallback",
+							priceStatus: "fallback",
+							quoteSymbolNormalized: "USDT/USD",
+						};
+					}
+					return {
+						currentPriceUsd: "0",
+						priceSource: "unavailable",
+						priceStatus: "unavailable",
+						quoteSymbolNormalized: `${symbol}USDT`,
+					};
+				},
+			},
 		});
 
 		expect(report.reportMeta.chain).toBe("eth");
@@ -127,13 +153,44 @@ describe("molian asset proof workflow", () => {
 		expect(report.evidenceSamples.some((sample) => sample.explorerUrl.includes("etherscan.io/tx/0xusdt-in"))).toBe(
 			true,
 		);
-		expect(report.appendix.dataSources).toEqual(expect.arrayContaining(["etherscan", "evm_token_transfers"]));
+		expect(report.reportMeta.sourceSummary).toContain("etherscan");
+		expect(report.assetProofItems.find((item) => item.assetSymbol === "ETH")).toEqual(
+			expect.objectContaining({
+				currentPriceUsd: "2500",
+				currentValueUsd: "125000",
+				priceSource: "binance",
+				priceStatus: "live",
+				quoteSymbolNormalized: "ETHUSDT",
+				historicalTotalInText: "50 ETH",
+				historicalTotalOutText: "1 ETH",
+				flowCoverage: "complete",
+			}),
+		);
+		expect(report.assetProofItems.find((item) => item.assetSymbol === "USDT")).toEqual(
+			expect.objectContaining({
+				historicalTotalInText: "100 USDT",
+				historicalTotalOutText: "40 USDT",
+				flowCoverage: "complete",
+			}),
+		);
+		expect(report.assetProofItems.find((item) => item.assetSymbol === "FWB")).toEqual(
+			expect.objectContaining({
+				currentPriceUsd: "0",
+				currentValueUsd: "0",
+				priceSource: "unavailable",
+				priceStatus: "unavailable",
+				proofGrade: "weak_support",
+				historicalTotalInText: "1143.8 FWB",
+				historicalTotalOutText: "1000 FWB",
+				flowCoverage: "complete",
+			}),
+		);
 	});
 
 	it("exports html and applies guarded agent summary patch", async () => {
 		const tempDir = createTempDir();
 		const authStorage = AuthStorage.inMemory();
-		const progressStages: string[] = [];
+		const progressEvents: Array<{ stage: string; message: string }> = [];
 		const narrator: MolianAssetProofNarrator = {
 			async narrate() {
 				return {
@@ -142,7 +199,6 @@ describe("molian asset proof workflow", () => {
 					topFindings: ["A", "B", "C", "D", "E", "F"],
 					keyAssets: ["BTC", "FAKE"],
 					evidenceStrengthNote: "基于脚本样本 + agent 总结",
-					coverageLimitations: ["仅覆盖公开数据"],
 				};
 			},
 		};
@@ -157,7 +213,7 @@ describe("molian asset proof workflow", () => {
 			enableAgentSummary: true,
 			narrator,
 			onProgress: (event) => {
-				progressStages.push(event.stage);
+				progressEvents.push({ stage: event.stage, message: event.message });
 			},
 			providerOverrides: {
 				btcOverview: async () => ({
@@ -190,6 +246,12 @@ describe("molian asset proof workflow", () => {
 						notes: ["Recent transaction samples are partial."],
 					},
 				}),
+				marketPrice: async () => ({
+					currentPriceUsd: "76000",
+					priceSource: "binance",
+					priceStatus: "live",
+					quoteSymbolNormalized: "BTCUSDT",
+				}),
 			},
 		});
 
@@ -200,15 +262,190 @@ describe("molian asset proof workflow", () => {
 		expect(result.report.executiveSummary.overallGrade).toBe("strong_support");
 		expect(result.report.executiveSummary.topFindings).toEqual(["A", "B", "C", "D", "E"]);
 		expect(result.report.executiveSummary.keyAssets).toEqual(["BTC"]);
+		expect(result.report.assetProofItems[0]).toEqual(
+			expect.objectContaining({
+				historicalTotalInText: "1.75 BTC",
+				historicalTotalOutText: "0.25 BTC",
+				flowCoverage: "complete",
+			}),
+		);
 		expect(html).toContain("&lt;b&gt;较强&lt;/b&gt;");
-		expect(html).toContain("仅覆盖公开数据");
+		expect(html).not.toContain("结论与局限");
+		expect(html).not.toContain("附录");
 		expect(result.outputPath).toContain("/molian-reports/");
-		expect(progressStages).toEqual([
-			"collecting_data",
-			"building_report",
-			"agent_summary",
-			"rendering_html",
-			"writing_file",
+		expect(progressEvents.slice(0, 5)).toEqual([
+			{ stage: "collecting_data", message: "Collecting on-chain data..." },
+			{ stage: "collecting_data", message: "Collecting BTC address overview..." },
+			{ stage: "building_report", message: "Building quantitative report structure..." },
+			{ stage: "agent_summary", message: "Applying agent summary guard..." },
+			{ stage: "rendering_html", message: "Rendering HTML report..." },
 		]);
+		expect(progressEvents[5]).toEqual(
+			expect.objectContaining({
+				stage: "writing_file",
+				message: expect.stringContaining("Writing report file to"),
+			}),
+		);
+	});
+
+	it("marks TRON native flow coverage as sampled", async () => {
+		const report = await buildMolianAssetProofReport({
+			address: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+			chain: "tron",
+			authStorage: AuthStorage.inMemory({
+				"molian-tron": { type: "api_key", key: "tron-key" },
+			}),
+			providerOverrides: {
+				tronOverview: async () => ({
+					chain: "tron",
+					address: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+					balanceSummary: { nativeSymbol: "TRX", nativeBalance: "88" },
+					activitySummary: {
+						txCount: 2,
+						firstSeenAt: "2024-01-01T00:00:00.000Z",
+						lastSeenAt: "2024-01-02T00:00:00.000Z",
+					},
+					transferSummary: {
+						largeTransfers: [
+							{
+								timestamp: "2024-01-01T00:00:00.000Z",
+								amount: "30",
+								symbol: "TRX",
+								direction: "in",
+							},
+							{
+								timestamp: "2024-01-02T00:00:00.000Z",
+								amount: "10",
+								symbol: "TRX",
+								direction: "out",
+							},
+						],
+					},
+					counterparties: [],
+					labels: [],
+					sourceMeta: {
+						provider: "trongrid",
+						partial: true,
+						notes: ["Only sampled TRX transfer history is included in the MVP provider."],
+					},
+				}),
+				marketPrice: async () => ({
+					currentPriceUsd: "0.12",
+					priceSource: "binance",
+					priceStatus: "live",
+					quoteSymbolNormalized: "TRXUSDT",
+				}),
+			},
+		});
+
+		expect(report.assetProofItems[0]).toEqual(
+			expect.objectContaining({
+				historicalTotalInText: "30 TRX",
+				historicalTotalOutText: "10 TRX",
+				flowCoverage: "sampled",
+			}),
+		);
+	});
+
+	it("never reports a native peak balance below the current balance", async () => {
+		const report = await buildMolianAssetProofReport({
+			address: "16G1xYBbiNG78LSuZdMqp6tux5xvVp9Wxh",
+			chain: "btc",
+			providerOverrides: {
+				btcOverview: async () => ({
+					chain: "btc",
+					address: "16G1xYBbiNG78LSuZdMqp6tux5xvVp9Wxh",
+					balanceSummary: { nativeSymbol: "BTC", nativeBalance: "2.23362177" },
+					activitySummary: {
+						txCount: 96673,
+						lastSeenAt: "2026-05-26T06:36:21.000Z",
+					},
+					transferSummary: {
+						totalIn: "940.33318119",
+						totalOut: "938.09955942",
+						largeTransfers: [
+							{
+								timestamp: "2026-05-24T16:06:27.000Z",
+								amount: "0.04516784",
+								symbol: "BTC",
+								direction: "in",
+							},
+						],
+					},
+					counterparties: [],
+					labels: [],
+					sourceMeta: {
+						provider: "mempool.space",
+						partial: true,
+						notes: ["Recent transaction samples are partial and may omit older history."],
+					},
+				}),
+				marketPrice: async () => ({
+					currentPriceUsd: "76000",
+					priceSource: "binance",
+					priceStatus: "live",
+					quoteSymbolNormalized: "BTCUSDT",
+				}),
+			},
+		});
+
+		expect(report.assetProofItems[0]).toEqual(
+			expect.objectContaining({
+				peakBalance: "2.23362177 BTC",
+				peakBalanceAt: "",
+				currentValueUsd: "169755.25",
+			}),
+		);
+	});
+
+	it("marks empty EVM reports as inconclusive and suggests checking chain selection", async () => {
+		const report = await buildMolianAssetProofReport({
+			address: "0x65f0ec303ad5007be21f6808febb3edccd1369e1",
+			chain: "eth",
+			authStorage: AuthStorage.inMemory({
+				"molian-eth": { type: "api_key", key: "eth-key" },
+			}),
+			providerOverrides: {
+				evmOverview: async () => ({
+					chain: "eth",
+					address: "0x65f0ec303ad5007be21f6808febb3edccd1369e1",
+					balanceSummary: { nativeSymbol: "ETH", nativeBalance: "0" },
+					activitySummary: {
+						txCount: 0,
+					},
+					transferSummary: {
+						totalIn: "0",
+						totalOut: "0",
+						largeTransfers: [],
+					},
+					counterparties: [],
+					labels: [],
+					sourceMeta: {
+						provider: "etherscan",
+						partial: true,
+						notes: [],
+					},
+				}),
+				evmTokenTransfers: async () => [],
+				marketPrice: async () => ({
+					currentPriceUsd: "2500",
+					priceSource: "binance",
+					priceStatus: "live",
+					quoteSymbolNormalized: "ETHUSDT",
+				}),
+			},
+		});
+
+		expect(report.executiveSummary.overallGrade).toBe("inconclusive");
+		expect(report.assetProofItems).toEqual([]);
+		expect(report.executiveSummary.keyAssets).toEqual([]);
+		expect(report.executiveSummary.coreConclusion).toContain("所选链上未观察到有效交易活动");
+		expect(report.executiveSummary.evidenceStrengthNote).toContain("优先复核链选择");
+		expect(report.executiveSummary.topFindings).toEqual(
+			expect.arrayContaining([
+				"所选链上未观测到交易记录。",
+				"如预期该地址应有活动，优先复核链选择与链上 API 配置。",
+			]),
+		);
 	});
 });

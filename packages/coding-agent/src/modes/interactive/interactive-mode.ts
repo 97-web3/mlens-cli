@@ -90,6 +90,7 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { exportMolianAssetProofReport } from "../../molian/asset-proof-workflow.ts";
 import { parseMolianReportArgs } from "../../molian/commands/report.ts";
+import { createMolianReportProgressMessage, updateMolianReportProgress } from "../../molian/report-progress.ts";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -5054,6 +5055,15 @@ export class InteractiveMode {
 		}
 
 		try {
+			const progressOrder = [
+				"collecting_data",
+				"building_report",
+				"agent_summary",
+				"rendering_html",
+				"writing_file",
+			] as const;
+			const runId = `report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+			let progressMessageSent = false;
 			const result = await exportMolianAssetProofReport({
 				address: parsed.address,
 				chain: parsed.chain,
@@ -5064,7 +5074,18 @@ export class InteractiveMode {
 				model: this.session.model ?? undefined,
 				enableAgentSummary: true,
 				onProgress: (event) => {
+					const details = {
+						...event,
+						runId,
+						index: progressOrder.indexOf(event.stage) + 1,
+						total: progressOrder.length,
+					};
+					updateMolianReportProgress(details);
 					this.setExtensionStatus("molian.report", event.message);
+					if (!progressMessageSent) {
+						progressMessageSent = true;
+						void this.session.sendCustomMessage(createMolianReportProgressMessage(details));
+					}
 				},
 			});
 			this.setExtensionStatus("molian.report", undefined);

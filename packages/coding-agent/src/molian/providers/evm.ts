@@ -7,6 +7,12 @@ interface EtherscanBalanceResponse {
 	result: string;
 }
 
+interface EtherscanListResponse<T> {
+	status: string;
+	message: string;
+	result: T[] | string;
+}
+
 interface EtherscanTx {
 	timeStamp: string;
 	hash: string;
@@ -14,12 +20,6 @@ interface EtherscanTx {
 	to: string;
 	value: string;
 	tokenSymbol?: string;
-}
-
-interface EtherscanTxListResponse {
-	status: string;
-	message: string;
-	result: EtherscanTx[] | string;
 }
 
 export interface EvmTokenTransfer {
@@ -34,11 +34,8 @@ export interface EvmTokenTransfer {
 	contractAddress: string;
 }
 
-interface EtherscanTokenTxListResponse {
-	status: string;
-	message: string;
-	result: EvmTokenTransfer[] | string;
-}
+const DEFAULT_EVM_HISTORY_PAGE_SIZE = 200;
+const EXPLORER_EMPTY_RESULT_PATTERNS = [/^no transactions found$/iu, /^no records found$/iu];
 
 function getMissingConfigMessage(chain: "eth" | "bsc"): string {
 	return `Missing ${chain.toUpperCase()} API key. Run /chain-config to configure chain API access.`;
@@ -74,6 +71,84 @@ async function fetchJson<T>(
 		});
 	}
 	return (await response.json()) as T;
+}
+
+async function fetchPaginatedResults<T>(
+	config: MolianEvmProviderConfig,
+	chain: "eth" | "bsc",
+	address: string,
+	params: Record<string, string>,
+	offset: number,
+): Promise<T[]> {
+	const results: T[] = [];
+	for (let page = 1; ; page++) {
+		const response = await fetchJson<EtherscanListResponse<T>>(config, chain, {
+			...params,
+			page: String(page),
+			offset: String(offset),
+		});
+		const pageResults = parseExplorerListResult(response, chain, address);
+		results.push(...pageResults);
+		if (pageResults.length < offset) {
+			break;
+		}
+	}
+	return results;
+}
+
+function isExplorerEmptyResult(message: string, result: string): boolean {
+	const normalizedMessage = message.trim();
+	const normalizedResult = result.trim();
+	return EXPLORER_EMPTY_RESULT_PATTERNS.some(
+		(pattern) => pattern.test(normalizedMessage) || pattern.test(normalizedResult),
+	);
+}
+
+function createExplorerProviderError(chain: "eth" | "bsc", address: string, message: string): MolianProviderError {
+	return new MolianProviderError({
+		code: "provider_error",
+		chain,
+		address,
+		message,
+	});
+}
+
+function parseExplorerListResult<T>(response: EtherscanListResponse<T>, chain: "eth" | "bsc", address: string): T[] {
+	if (Array.isArray(response.result)) {
+		return response.result;
+	}
+	if (isExplorerEmptyResult(response.message, response.result)) {
+		return [];
+	}
+	throw createExplorerProviderError(
+		chain,
+		address,
+		response.result.trim() || response.message.trim() || "Explorer history request failed.",
+	);
+}
+
+function parseExplorerBalanceResult(response: EtherscanBalanceResponse, chain: "eth" | "bsc", address: string): string {
+	if (/^\d+$/u.test(response.result.trim())) {
+		return response.result;
+	}
+	throw createExplorerProviderError(
+		chain,
+		address,
+		response.result.trim() || response.message.trim() || "Explorer balance request failed.",
+	);
+}
+
+function parseExplorerBigInt(
+	value: string | undefined,
+	chain: "eth" | "bsc",
+	address: string,
+	fallbackMessage: string,
+): bigint {
+	const trimmed = value?.trim() ?? "";
+	if (/^\d+$/u.test(trimmed)) {
+		return BigInt(trimmed);
+	}
+	throw createExplorerProviderError(chain, address, trimmed || fallbackMessage);
 }
 
 function toNative(balanceWei: string): string {
@@ -114,18 +189,55 @@ function summarizeLargeTransfers(
 	const symbol = chain === "eth" ? "ETH" : "BNB";
 	const normalizedAddress = address.toLowerCase();
 	return txs
-		.map((tx) => ({
-			timestamp: new Date(Number(tx.timeStamp) * 1000).toISOString(),
-			amount: toNative(tx.value),
-			symbol,
-			direction: tx.to.toLowerCase() === normalizedAddress ? ("in" as const) : ("out" as const),
-			txHash: tx.hash,
-			counterpartyAddress: tx.to.toLowerCase() === normalizedAddress ? tx.from.toLowerCase() : tx.to.toLowerCase(),
-			rawValue: BigInt(tx.value),
-		}))
+		.map((tx) => {
+			const rawValue = parseExplorerBigInt(
+				tx.value,
+				chain,
+				address,
+				"Explorer response contained a malformed native transfer value.",
+			);
+			return {
+				timestamp: new Date(Number(tx.timeStamp) * 1000).toISOString(),
+				amount: toNative(rawValue.toString()),
+				symbol,
+				direction: tx.to.toLowerCase() === normalizedAddress ? ("in" as const) : ("out" as const),
+				txHash: tx.hash,
+				counterpartyAddress:
+					tx.to.toLowerCase() === normalizedAddress ? tx.from.toLowerCase() : tx.to.toLowerCase(),
+				rawValue,
+			};
+		})
 		.sort((a, b) => (a.rawValue > b.rawValue ? -1 : a.rawValue < b.rawValue ? 1 : 0))
 		.slice(0, 3)
 		.map(({ rawValue: _rawValue, ...transfer }) => transfer);
+}
+
+function summarizeTransferTotals(
+	chain: "eth" | "bsc",
+	address: string,
+	txs: EtherscanTx[],
+): { totalIn: string; totalOut: string } {
+	const normalizedAddress = address.toLowerCase();
+	let totalInWei = 0n;
+	let totalOutWei = 0n;
+	for (const tx of txs) {
+		const rawValue = parseExplorerBigInt(
+			tx.value,
+			chain,
+			address,
+			"Explorer response contained a malformed native transfer value.",
+		);
+		if (tx.to.toLowerCase() === normalizedAddress) {
+			totalInWei += rawValue;
+		}
+		if (tx.from.toLowerCase() === normalizedAddress) {
+			totalOutWei += rawValue;
+		}
+	}
+	return {
+		totalIn: toNative(totalInWei.toString()),
+		totalOut: toNative(totalOutWei.toString()),
+	};
 }
 
 export async function getEvmAddressOverview(
@@ -149,28 +261,34 @@ export async function getEvmAddressOverview(
 			address,
 			tag: "latest",
 		}),
-		fetchJson<EtherscanTxListResponse>(config, chain, {
-			module: "account",
-			action: "txlist",
+		fetchPaginatedResults<EtherscanTx>(
+			config,
+			chain,
 			address,
-			sort: "asc",
-			page: "1",
-			offset: "50",
-			startblock: "0",
-			endblock: "99999999",
-		}),
+			{
+				module: "account",
+				action: "txlist",
+				address,
+				sort: "asc",
+				startblock: "0",
+				endblock: "99999999",
+			},
+			DEFAULT_EVM_HISTORY_PAGE_SIZE,
+		),
 	]);
 
-	const txs = Array.isArray(txResponse.result) ? txResponse.result : [];
+	const txs = txResponse;
 	const firstSeen = txs[0]?.timeStamp;
 	const lastSeen = txs[txs.length - 1]?.timeStamp;
+	const transferTotals = summarizeTransferTotals(chain, address, txs);
+	const nativeBalanceWei = parseExplorerBalanceResult(balanceResponse, chain, address);
 
 	return {
 		chain,
 		address,
 		balanceSummary: {
 			nativeSymbol: chain === "eth" ? "ETH" : "BNB",
-			nativeBalance: toNative(balanceResponse.result || "0"),
+			nativeBalance: toNative(nativeBalanceWei),
 		},
 		activitySummary: {
 			txCount: txs.length,
@@ -182,6 +300,8 @@ export async function getEvmAddressOverview(
 					: undefined,
 		},
 		transferSummary: {
+			totalIn: transferTotals.totalIn,
+			totalOut: transferTotals.totalOut,
 			largeTransfers: summarizeLargeTransfers(chain, address, txs),
 		},
 		counterparties: uniqueCounterparties(address, txs),
@@ -191,7 +311,7 @@ export async function getEvmAddressOverview(
 			partial: true,
 			notes: [
 				"Overview currently relies on explorer account endpoints.",
-				"Total in/out and richer labeling are not fully available in the MVP provider.",
+				"Native transfer totals are computed from paginated explorer history and remain subject to explorer coverage and rate limits.",
 			],
 		},
 	};
@@ -212,16 +332,18 @@ export async function getEvmTokenTransfers(
 		});
 	}
 
-	const response = await fetchJson<EtherscanTokenTxListResponse>(config, chain, {
-		module: "account",
-		action: "tokentx",
+	return fetchPaginatedResults<EvmTokenTransfer>(
+		config,
+		chain,
 		address,
-		sort: "asc",
-		page: "1",
-		offset: String(options.offset ?? 200),
-		startblock: "0",
-		endblock: "99999999",
-	});
-
-	return Array.isArray(response.result) ? response.result : [];
+		{
+			module: "account",
+			action: "tokentx",
+			address,
+			sort: "asc",
+			startblock: "0",
+			endblock: "99999999",
+		},
+		options.offset ?? DEFAULT_EVM_HISTORY_PAGE_SIZE,
+	);
 }

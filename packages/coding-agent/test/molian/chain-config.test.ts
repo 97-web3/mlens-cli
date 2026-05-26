@@ -4,6 +4,7 @@ import type { ExtensionContext, SessionStartEvent } from "../../src/index.ts";
 import {
 	getMissingRequiredMolianChains,
 	maybePromptForMolianChainConfigOnStartup,
+	resolveMolianEvmProviderConfig,
 	runMolianChainConfigWizard,
 } from "../../src/molian/chain-config.ts";
 
@@ -43,6 +44,22 @@ describe("molian chain config", () => {
 		const authStorage = AuthStorage.inMemory();
 
 		expect(getMissingRequiredMolianChains(authStorage)).toEqual(["eth", "bsc", "tron"]);
+	});
+
+	it("uses the shared Etherscan V2 base path for both ETH and BSC", () => {
+		const authStorage = AuthStorage.inMemory({
+			"molian-eth": { type: "api_key", key: "eth-key" },
+			"molian-bsc": { type: "api_key", key: "bsc-key" },
+		});
+
+		expect(resolveMolianEvmProviderConfig(authStorage, "eth")).toEqual({
+			baseUrl: "https://api.etherscan.io/v2/api",
+			apiKey: "eth-key",
+		});
+		expect(resolveMolianEvmProviderConfig(authStorage, "bsc")).toEqual({
+			baseUrl: "https://api.etherscan.io/v2/api",
+			apiKey: "bsc-key",
+		});
 	});
 
 	it("persists entered chain keys and leaves skipped chains unset", async () => {

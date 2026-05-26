@@ -147,10 +147,20 @@ export async function getBtcAddressOverview(
 		fetchJson<MempoolTx[]>(config.baseUrl, `/address/${address}/txs`),
 	]);
 
-	const firstSeen = [...txsResponse]
-		.filter((tx) => tx.status?.block_time !== undefined)
-		.sort((a, b) => (a.status?.block_time ?? 0) - (b.status?.block_time ?? 0));
-	const lastSeen = firstSeen[firstSeen.length - 1];
+	const confirmedTxs = txsResponse.filter((tx) => tx.status?.block_time !== undefined);
+	const sortedConfirmedTxs = [...confirmedTxs].sort(
+		(a, b) => (a.status?.block_time ?? 0) - (b.status?.block_time ?? 0),
+	);
+	const lastSeen = sortedConfirmedTxs[sortedConfirmedTxs.length - 1];
+	const hasCompleteConfirmedHistory = addressResponse.chain_stats.tx_count <= confirmedTxs.length;
+	const firstSeenAt =
+		hasCompleteConfirmedHistory && sortedConfirmedTxs[0]?.status?.block_time !== undefined
+			? new Date(sortedConfirmedTxs[0].status.block_time * 1000).toISOString()
+			: undefined;
+	const lastSeenAt =
+		lastSeen?.status?.block_time !== undefined
+			? new Date(lastSeen.status.block_time * 1000).toISOString()
+			: undefined;
 
 	return {
 		chain: "btc",
@@ -163,14 +173,8 @@ export async function getBtcAddressOverview(
 		},
 		activitySummary: {
 			txCount: addressResponse.chain_stats.tx_count + addressResponse.mempool_stats.tx_count,
-			firstSeenAt:
-				firstSeen[0]?.status?.block_time !== undefined
-					? new Date(firstSeen[0].status.block_time * 1000).toISOString()
-					: undefined,
-			lastSeenAt:
-				lastSeen?.status?.block_time !== undefined
-					? new Date(lastSeen.status.block_time * 1000).toISOString()
-					: undefined,
+			firstSeenAt,
+			lastSeenAt,
 		},
 		transferSummary: {
 			totalIn: satsToBtc(addressResponse.chain_stats.funded_txo_sum),

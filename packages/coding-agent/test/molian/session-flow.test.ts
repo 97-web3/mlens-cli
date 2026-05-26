@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createMolianExtensionFactory } from "../../src/molian/extension.ts";
+import { MOLIAN_REPORT_PROGRESS_CUSTOM_TYPE } from "../../src/molian/report-progress.ts";
 import { createHarness, type Harness } from "../suite/harness.ts";
 
 describe("molian session flow", () => {
@@ -23,5 +24,6 @@ describe("molian session flow", () => {
 		expect(commands).toContain("chain-config");
 		expect(commands).not.toContain("analyze");
 		expect(harness.session.getAllTools().map((tool) => tool.name)).toContain("resolve_chain_for_address");
+		expect(harness.session.extensionRunner.getMessageRenderer(MOLIAN_REPORT_PROGRESS_CUSTOM_TYPE)).toBeDefined();
 	});
 });

@@ -1,6 +1,9 @@
 import type { SupportedChain } from "./tools/types.ts";
 
 export type MolianReportGrade = "strong_support" | "moderate_support" | "weak_support" | "inconclusive";
+export type MolianAssetPriceSource = "binance" | "okx" | "stablecoin_fallback" | "unavailable";
+export type MolianAssetPriceStatus = "live" | "fallback" | "unavailable";
+export type MolianAssetFlowCoverage = "complete" | "sampled";
 
 export type MolianAssetCategory =
 	| "native"
@@ -25,7 +28,6 @@ export type MolianEvidenceDirection = "in" | "out" | "both" | "unknown";
 
 export interface MolianAssetProofReportMeta {
 	reportId: string;
-	subjectName?: string;
 	targetAddress: string;
 	chain: SupportedChain;
 	reportType: "asset_proof";
@@ -81,6 +83,14 @@ export interface MolianAssetProofItem {
 	peakBalanceAt: string;
 	highHoldingPeriod: string;
 	historicalShareOfPortfolio: string;
+	currentPriceUsd: string;
+	currentValueUsd: string;
+	priceSource: MolianAssetPriceSource;
+	priceStatus: MolianAssetPriceStatus;
+	quoteSymbolNormalized: string;
+	historicalTotalInText: string;
+	historicalTotalOutText: string;
+	flowCoverage: MolianAssetFlowCoverage;
 	proofSummary: string;
 	sampleEvidenceRows: MolianEvidenceSampleRow[];
 }
@@ -99,20 +109,6 @@ export interface MolianParticipationItem {
 	sampleEvidenceRows: MolianEvidenceSampleRow[];
 }
 
-export interface MolianLimitations {
-	coverageLimitations: string[];
-	missingDataPoints: string[];
-	assumptionNotes: string[];
-	cannotConcludeItems: string[];
-}
-
-export interface MolianAppendix {
-	dataSources: string[];
-	addressLabels: string[];
-	methodNotes: string;
-	tagGlossary: string[];
-}
-
 export interface MolianAssetProofReport {
 	reportMeta: MolianAssetProofReportMeta;
 	executiveSummary: MolianExecutiveSummary;
@@ -120,14 +116,11 @@ export interface MolianAssetProofReport {
 	assetProofItems: MolianAssetProofItem[];
 	participationItems: MolianParticipationItem[];
 	evidenceSamples: MolianEvidenceSampleRow[];
-	limitations: MolianLimitations;
-	appendix: MolianAppendix;
 }
 
 export interface CreateMolianAssetProofReportTemplateInput {
 	targetAddress: string;
 	chain: SupportedChain;
-	subjectName?: string;
 }
 
 const REPORT_TITLE = "资产证明审查报告";
@@ -161,6 +154,18 @@ const ASSET_CATEGORY_LABELS: Record<MolianAssetCategory, string> = {
 	other: "其他",
 };
 
+const PRIMARY_DISPLAYABLE_ASSET_GRADES = new Set<MolianReportGrade>(["strong_support", "moderate_support"]);
+const PRICE_SOURCE_LABELS: Record<MolianAssetPriceSource, string> = {
+	binance: "Binance",
+	okx: "OKX",
+	stablecoin_fallback: "稳定币回退",
+	unavailable: "未获取",
+};
+const FLOW_COVERAGE_LABELS: Record<MolianAssetFlowCoverage, string> = {
+	complete: "完整历史",
+	sampled: "样本历史",
+};
+
 function normalizeAddressForId(address: string): string {
 	return address.trim().toLowerCase();
 }
@@ -176,11 +181,56 @@ function escapeHtml(text: string): string {
 
 function formatMaybeText(value: string | undefined): string {
 	const trimmed = value?.trim();
-	return trimmed ? escapeHtml(trimmed) : '<span class="placeholder">待补充</span>';
+	return trimmed ? escapeHtml(replaceInlineIsoDateTimes(trimmed)) : '<span class="placeholder">待补充</span>';
 }
 
 function formatMaybeNumber(value: number | undefined): string {
 	return value !== undefined ? escapeHtml(value.toLocaleString()) : '<span class="placeholder">待补充</span>';
+}
+
+function formatDateTimeText(value: string): string {
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return trimmed;
+	}
+	if (trimmed.includes(" -> ")) {
+		return trimmed
+			.split(" -> ")
+			.map((part) => formatDateTimeText(part))
+			.join(" -> ");
+	}
+	const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/u);
+	if (!isoMatch) {
+		return trimmed;
+	}
+	const [, year, month, day, hour, minute, second] = isoMatch;
+	return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+}
+
+function replaceInlineIsoDateTimes(value: string): string {
+	return value.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?/gu, (match) =>
+		formatDateTimeText(match),
+	);
+}
+
+function formatMaybeDateTime(value: string | undefined): string {
+	const trimmed = value?.trim();
+	return trimmed ? escapeHtml(formatDateTimeText(trimmed)) : '<span class="placeholder">待补充</span>';
+}
+
+function formatUsdAmount(value: string): string {
+	const numericValue = Number.parseFloat(value);
+	if (!Number.isFinite(numericValue)) {
+		return '<span class="placeholder">待补充</span>';
+	}
+	return escapeHtml(
+		numericValue.toLocaleString("en-US", {
+			style: "currency",
+			currency: "USD",
+			minimumFractionDigits: 2,
+			maximumFractionDigits: 2,
+		}),
+	);
 }
 
 function formatList(items: string[], emptyText = "待补充"): string {
@@ -194,52 +244,7 @@ function renderBulletList(items: string[], emptyText: string): string {
 	if (items.length === 0) {
 		return `<p class="placeholder-block">${escapeHtml(emptyText)}</p>`;
 	}
-	return `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
-}
-
-function renderEvidenceRows(rows: MolianEvidenceSampleRow[]): string {
-	if (rows.length === 0) {
-		return '<p class="placeholder-block">未发现可支持证据</p>';
-	}
-
-	return `<div class="table-wrap">
-		<table>
-			<thead>
-				<tr>
-					<th>样本标题</th>
-					<th>时间</th>
-					<th>事件</th>
-					<th>资产</th>
-					<th>方向</th>
-					<th>金额</th>
-					<th>对手方</th>
-					<th>交易</th>
-					<th>备注</th>
-				</tr>
-			</thead>
-			<tbody>
-				${rows
-					.map((row) => {
-						const counterparty = row.counterpartyLabel || row.counterpartyAddress || "-";
-						const txCell = row.explorerUrl.trim()
-							? `<a href="${escapeHtml(row.explorerUrl)}" target="_blank" rel="noreferrer">${escapeHtml(row.txHash || "查看链接")}</a>`
-							: escapeHtml(row.txHash || "-");
-						return `<tr>
-							<td>${escapeHtml(row.sampleTitle)}</td>
-							<td>${formatMaybeText(row.eventTime)}</td>
-							<td>${escapeHtml(row.eventType)}</td>
-							<td>${escapeHtml(row.assetSymbol)}</td>
-							<td>${escapeHtml(row.direction)}</td>
-							<td>${escapeHtml(row.amountText)}</td>
-							<td>${escapeHtml(counterparty)}</td>
-							<td>${txCell}</td>
-							<td>${formatMaybeText(row.note)}</td>
-						</tr>`;
-					})
-					.join("")}
-			</tbody>
-		</table>
-	</div>`;
+	return `<ul>${items.map((item) => `<li>${escapeHtml(replaceInlineIsoDateTimes(item))}</li>`).join("")}</ul>`;
 }
 
 function renderKeyValueGrid(items: Array<{ label: string; value: string }>): string {
@@ -255,13 +260,44 @@ function renderKeyValueGrid(items: Array<{ label: string; value: string }>): str
 	</div>`;
 }
 
+function renderAssetFlowSummary(items: MolianAssetProofItem[]): string {
+	if (items.length === 0) {
+		return '<p class="placeholder-block">暂无资产流水统计</p>';
+	}
+
+	return `<div class="table-wrap">
+		<table>
+			<thead>
+				<tr>
+					<th>资产</th>
+					<th>历史流入</th>
+					<th>历史流出</th>
+					<th>口径</th>
+				</tr>
+			</thead>
+			<tbody>
+				${items
+					.map(
+						(item) => `<tr>
+							<td>${escapeHtml(item.assetSymbol)}</td>
+							<td>${formatMaybeText(item.historicalTotalInText)}</td>
+							<td>${formatMaybeText(item.historicalTotalOutText)}</td>
+							<td>${escapeHtml(FLOW_COVERAGE_LABELS[item.flowCoverage])}</td>
+						</tr>`,
+					)
+					.join("")}
+			</tbody>
+		</table>
+	</div>`;
+}
+
 function renderQuantSummary(report: MolianAssetProofReport): string {
 	return `<div class="panel">
 		<h3>量化快照</h3>
 		${renderKeyValueGrid([
 			{ label: "链", value: escapeHtml(report.reportMeta.chain.toUpperCase()) },
-			{ label: "首次活跃", value: formatMaybeText(report.addressProfile.firstActivityAt) },
-			{ label: "最后活跃", value: formatMaybeText(report.addressProfile.lastActivityAt) },
+			{ label: "首次活跃", value: formatMaybeDateTime(report.addressProfile.firstActivityAt) },
+			{ label: "最后活跃", value: formatMaybeDateTime(report.addressProfile.lastActivityAt) },
 			{ label: "总交易笔数", value: formatMaybeNumber(report.addressProfile.totalTxCount) },
 			{ label: "Token 转账笔数", value: formatMaybeNumber(report.addressProfile.tokenTransferCount) },
 			{ label: "当前原生币余额", value: formatMaybeText(report.addressProfile.currentNativeBalance) },
@@ -269,15 +305,36 @@ function renderQuantSummary(report: MolianAssetProofReport): string {
 			{ label: "项目线索数", value: escapeHtml(String(report.participationItems.length)) },
 			{ label: "关键证据样本数", value: escapeHtml(String(report.evidenceSamples.length)) },
 		])}
+		<h3>资产历史流水</h3>
+		${renderAssetFlowSummary(report.assetProofItems)}
 	</div>`;
 }
 
+function getDisplayAssetProofItems(items: MolianAssetProofItem[]): MolianAssetProofItem[] {
+	const preferredItems = items.filter((item) => PRIMARY_DISPLAYABLE_ASSET_GRADES.has(item.proofGrade));
+	if (preferredItems.length > 0) {
+		return preferredItems;
+	}
+
+	const weakItems = items.filter((item) => item.proofGrade === "weak_support");
+	if (weakItems.length > 0) {
+		return weakItems;
+	}
+
+	return items;
+}
+
+function renderPriceMeta(item: MolianAssetProofItem): string {
+	return `<div class="muted">报价来源：${escapeHtml(PRICE_SOURCE_LABELS[item.priceSource])} · ${escapeHtml(item.quoteSymbolNormalized || "-")}</div>`;
+}
+
 function renderAssetProofItems(items: MolianAssetProofItem[]): string {
-	if (items.length === 0) {
+	const displayItems = getDisplayAssetProofItems(items);
+	if (displayItems.length === 0) {
 		return '<p class="placeholder-block">未发现可支持证据</p>';
 	}
 
-	return items
+	return displayItems
 		.map((item) => {
 			return `<article class="card">
 				<div class="card-header">
@@ -288,15 +345,17 @@ function renderAssetProofItems(items: MolianAssetProofItem[]): string {
 					<span class="grade-badge grade-${escapeHtml(item.proofGrade)}">${escapeHtml(GRADE_LABELS[item.proofGrade])}</span>
 				</div>
 				${renderKeyValueGrid([
-					{ label: "最早出现", value: formatMaybeText(item.firstSeenAt) },
-					{ label: "最早获得", value: formatMaybeText(item.firstAcquiredAt) },
+					{ label: "最早出现", value: formatMaybeDateTime(item.firstSeenAt) },
+					{ label: "最早获得", value: formatMaybeDateTime(item.firstAcquiredAt) },
 					{ label: "历史峰值", value: formatMaybeText(item.peakBalance) },
-					{ label: "峰值时间", value: formatMaybeText(item.peakBalanceAt) },
-					{ label: "大额持仓时期", value: formatMaybeText(item.highHoldingPeriod) },
+					{ label: "峰值时间", value: formatMaybeDateTime(item.peakBalanceAt) },
+					{ label: "大额持仓时期", value: formatMaybeDateTime(item.highHoldingPeriod) },
 					{ label: "历史占比", value: formatMaybeText(item.historicalShareOfPortfolio) },
+					{ label: "当前单价 (USD)", value: formatUsdAmount(item.currentPriceUsd) },
+					{ label: "峰值等价 (USD)", value: formatUsdAmount(item.currentValueUsd) },
 				])}
 				<p class="summary-text">${formatMaybeText(item.proofSummary)}</p>
-				${renderEvidenceRows(item.sampleEvidenceRows)}
+				${renderPriceMeta(item)}
 			</article>`;
 		})
 		.join("");
@@ -318,7 +377,7 @@ function renderParticipationItems(items: MolianParticipationItem[]): string {
 					<span class="grade-badge grade-${escapeHtml(item.proofGrade)}">${escapeHtml(GRADE_LABELS[item.proofGrade])}</span>
 				</div>
 				${renderKeyValueGrid([
-					{ label: "参与时间", value: formatMaybeText(item.participationAt) },
+					{ label: "参与时间", value: formatMaybeDateTime(item.participationAt) },
 					{ label: "投入资产", value: formatMaybeText(item.inputAsset) },
 					{ label: "投入金额", value: formatMaybeText(item.inputAmountText) },
 					{ label: "退出资产", value: formatMaybeText(item.exitAsset) },
@@ -326,14 +385,14 @@ function renderParticipationItems(items: MolianParticipationItem[]): string {
 					{ label: "估计收益", value: formatMaybeText(item.estimatedProfitText) },
 				])}
 				<p class="summary-text">${formatMaybeText(item.proofSummary)}</p>
-				${renderEvidenceRows(item.sampleEvidenceRows)}
 			</article>`;
 		})
 		.join("");
 }
 
 function renderPeakBalanceSection(items: MolianAssetProofItem[]): string {
-	if (items.length === 0) {
+	const displayItems = getDisplayAssetProofItems(items);
+	if (displayItems.length === 0) {
 		return '<p class="placeholder-block">未发现可支持证据</p>';
 	}
 
@@ -348,19 +407,23 @@ function renderPeakBalanceSection(items: MolianAssetProofItem[]): string {
 						<th>峰值时间</th>
 						<th>大额持仓时期</th>
 						<th>历史占比</th>
+						<th>当前单价 (USD)</th>
+						<th>峰值等价 (USD)</th>
 						<th>摘要</th>
 					</tr>
 				</thead>
 				<tbody>
-					${items
+					${displayItems
 						.map(
 							(item) => `<tr>
 								<td>${escapeHtml(item.assetSymbol)}</td>
 								<td>${escapeHtml(GRADE_LABELS[item.proofGrade])}</td>
 								<td>${formatMaybeText(item.peakBalance)}</td>
-								<td>${formatMaybeText(item.peakBalanceAt)}</td>
-								<td>${formatMaybeText(item.highHoldingPeriod)}</td>
+								<td>${formatMaybeDateTime(item.peakBalanceAt)}</td>
+								<td>${formatMaybeDateTime(item.highHoldingPeriod)}</td>
 								<td>${formatMaybeText(item.historicalShareOfPortfolio)}</td>
+								<td>${formatUsdAmount(item.currentPriceUsd)}</td>
+								<td>${formatUsdAmount(item.currentValueUsd)}</td>
 								<td>${formatMaybeText(item.proofSummary)}</td>
 							</tr>`,
 						)
@@ -679,8 +742,8 @@ function renderAddressProfile(report: MolianAssetProofReport): string {
 		<h2 class="section-title">地址基本信息</h2>
 		<div class="panel">
 			${renderKeyValueGrid([
-				{ label: "首次活跃时间", value: formatMaybeText(profile.firstActivityAt) },
-				{ label: "最后活跃时间", value: formatMaybeText(profile.lastActivityAt) },
+				{ label: "首次活跃时间", value: formatMaybeDateTime(profile.firstActivityAt) },
+				{ label: "最后活跃时间", value: formatMaybeDateTime(profile.lastActivityAt) },
 				{ label: "地址年龄", value: formatMaybeText(profile.addressAgeText) },
 				{ label: "总交易笔数", value: formatMaybeNumber(profile.totalTxCount) },
 				{ label: "Token 转账笔数", value: formatMaybeNumber(profile.tokenTransferCount) },
@@ -695,50 +758,6 @@ function renderAddressProfile(report: MolianAssetProofReport): string {
 	</section>`;
 }
 
-function renderLimitations(report: MolianAssetProofReport): string {
-	return `<section class="section">
-		<h2 class="section-title">结论与局限</h2>
-		<div class="panel">
-			<h3>最终简结</h3>
-			<p class="summary-text">${formatMaybeText(report.executiveSummary.coreConclusion)}</p>
-		</div>
-		<div class="two-column">
-			<div class="panel">
-				<h3>当前无法判断</h3>
-				${renderBulletList(report.limitations.cannotConcludeItems, "当前无法判断")}
-				<h3>数据覆盖局限</h3>
-				${renderBulletList(report.limitations.coverageLimitations, "待补充")}
-			</div>
-			<div class="panel">
-				<h3>缺失数据点</h3>
-				${renderBulletList(report.limitations.missingDataPoints, "待补充")}
-				<h3>假设说明</h3>
-				${renderBulletList(report.limitations.assumptionNotes, "待补充")}
-			</div>
-		</div>
-	</section>`;
-}
-
-function renderAppendix(report: MolianAssetProofReport): string {
-	return `<section class="section">
-		<h2 class="section-title">附录</h2>
-		<div class="two-column">
-			<div class="panel">
-				<h3>数据来源</h3>
-				${renderBulletList(report.appendix.dataSources, "待补充")}
-				<h3>地址标签</h3>
-				${renderBulletList(report.appendix.addressLabels, "待补充")}
-			</div>
-			<div class="panel">
-				<h3>方法说明</h3>
-				<p class="summary-text">${formatMaybeText(report.appendix.methodNotes)}</p>
-				<h3>术语说明</h3>
-				${renderBulletList(report.appendix.tagGlossary, "待补充")}
-			</div>
-		</div>
-	</section>`;
-}
-
 export function createMolianAssetProofReportTemplate(
 	input: CreateMolianAssetProofReportTemplateInput,
 ): MolianAssetProofReport {
@@ -746,7 +765,6 @@ export function createMolianAssetProofReportTemplate(
 	return {
 		reportMeta: {
 			reportId: `asset-proof-${input.chain}-${normalizedAddress}`,
-			subjectName: input.subjectName,
 			targetAddress: input.targetAddress.trim(),
 			chain: input.chain,
 			reportType: "asset_proof",
@@ -773,18 +791,6 @@ export function createMolianAssetProofReportTemplate(
 		assetProofItems: [],
 		participationItems: [],
 		evidenceSamples: [],
-		limitations: {
-			coverageLimitations: [],
-			missingDataPoints: [],
-			assumptionNotes: [],
-			cannotConcludeItems: [],
-		},
-		appendix: {
-			dataSources: [],
-			addressLabels: [],
-			methodNotes: "",
-			tagGlossary: [],
-		},
 	};
 }
 
@@ -793,13 +799,12 @@ export function createMolianAssetProofReportFilename(report: MolianAssetProofRep
 }
 
 export function renderMolianAssetProofReportHtml(report: MolianAssetProofReport): string {
-	const titleTarget = report.reportMeta.subjectName?.trim() || report.reportMeta.targetAddress;
 	return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>${escapeHtml(REPORT_TITLE)} - ${escapeHtml(titleTarget)}</title>
+	<title>${escapeHtml(REPORT_TITLE)} - ${escapeHtml(report.reportMeta.targetAddress)}</title>
 	<style>
 ${renderStyles()}
 	</style>
@@ -810,10 +815,6 @@ ${renderStyles()}
 			<h1>${escapeHtml(REPORT_TITLE)}</h1>
 			<div class="muted">单地址 · 单链 · 摘要化取证模板</div>
 			<div class="hero-meta">
-				<div class="hero-meta-item">
-					<div class="hero-meta-label">审查对象</div>
-					<div class="hero-meta-value">${formatMaybeText(report.reportMeta.subjectName)}</div>
-				</div>
 				<div class="hero-meta-item">
 					<div class="hero-meta-label">目标地址</div>
 					<div class="hero-meta-value">${escapeHtml(report.reportMeta.targetAddress)}</div>
@@ -828,11 +829,11 @@ ${renderStyles()}
 				</div>
 				<div class="hero-meta-item">
 					<div class="hero-meta-label">生成时间</div>
-					<div class="hero-meta-value">${formatMaybeText(report.reportMeta.generatedAt)}</div>
+					<div class="hero-meta-value">${formatMaybeDateTime(report.reportMeta.generatedAt)}</div>
 				</div>
 				<div class="hero-meta-item">
 					<div class="hero-meta-label">数据截止</div>
-					<div class="hero-meta-value">${formatMaybeText(report.reportMeta.dataAsOf)}</div>
+					<div class="hero-meta-value">${formatMaybeDateTime(report.reportMeta.dataAsOf)}</div>
 				</div>
 			</div>
 		</header>
@@ -855,17 +856,7 @@ ${renderStyles()}
 			${renderParticipationItems(report.participationItems)}
 		</section>
 
-		<section class="section">
-			<h2 class="section-title">关键证据样本</h2>
-			<div class="panel">
-				${renderEvidenceRows(report.evidenceSamples)}
-			</div>
-		</section>
-
-		${renderLimitations(report)}
-		${renderAppendix(report)}
-
-		<div class="footer-note">模板版本：${escapeHtml(report.reportMeta.analystVersion)} · 数据源摘要：${formatMaybeText(report.reportMeta.sourceSummary)}</div>
+		<div class="footer-note">模板版本：${escapeHtml(report.reportMeta.analystVersion)} · 数据源摘要：${formatMaybeText(report.reportMeta.sourceSummary)} · 结论仅基于公开链上数据源，可能不完整。</div>
 	</div>
 </body>
 </html>`;

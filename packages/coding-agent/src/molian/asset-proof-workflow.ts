@@ -12,6 +12,9 @@ import { resolvePath } from "../utils/paths.ts";
 import {
 	createMolianAssetProofReportFilename,
 	createMolianAssetProofReportTemplate,
+	type MolianAssetFlowCoverage,
+	type MolianAssetPriceSource,
+	type MolianAssetPriceStatus,
 	type MolianAssetProofItem,
 	type MolianAssetProofReport,
 	type MolianEvidenceSampleRow,
@@ -28,6 +31,7 @@ import {
 	resolveMolianEvmProviderConfig,
 	resolveMolianTronProviderConfig,
 } from "./chain-config.ts";
+import { resolveMolianAssetMarketPrice } from "./market-price.ts";
 import { getBtcAddressOverview } from "./providers/btc.ts";
 import { type EvmTokenTransfer, getEvmAddressOverview, getEvmTokenTransfers } from "./providers/evm.ts";
 import { getTronAddressOverview } from "./providers/tron.ts";
@@ -54,10 +58,6 @@ export interface MolianAgentSummaryPatch {
 	topFindings?: string[];
 	keyAssets?: string[];
 	evidenceStrengthNote?: string;
-	coverageLimitations?: string[];
-	missingDataPoints?: string[];
-	assumptionNotes?: string[];
-	cannotConcludeItems?: string[];
 }
 
 export interface MolianAssetProofNarrator {
@@ -73,15 +73,21 @@ export interface MolianReportProviderOverrides {
 	) => Promise<EvmTokenTransfer[]>;
 	btcOverview?: (config: MolianBtcProviderConfig, address: string) => Promise<AddressOverview>;
 	tronOverview?: (config: MolianTronProviderConfig, address: string) => Promise<AddressOverview>;
+	marketPrice?: (symbol: string) => Promise<{
+		currentPriceUsd: string;
+		priceSource: MolianAssetPriceSource;
+		priceStatus: MolianAssetPriceStatus;
+		quoteSymbolNormalized: string;
+	}>;
 }
 
 export interface BuildMolianAssetProofReportOptions {
 	address: string;
 	chain: SupportedChain;
-	subjectName?: string;
 	authStorage?: AuthStorage;
 	generatedAt?: string;
 	dataAsOf?: string;
+	onProgress?: (event: MolianAssetProofProgressEvent) => void;
 	providerOverrides?: MolianReportProviderOverrides;
 }
 
@@ -106,6 +112,17 @@ export interface ExportMolianAssetProofReportResult {
 export interface MolianAssetProofProgressEvent {
 	stage: "collecting_data" | "building_report" | "agent_summary" | "rendering_html" | "writing_file";
 	message: string;
+	snapshot?: MolianAssetProofProgressSnapshot;
+}
+
+export interface MolianAssetProofProgressSnapshot {
+	chain: SupportedChain;
+	totalTxCount?: number;
+	tokenTransferCount?: number;
+	currentNativeBalance: string;
+	assetCount: number;
+	participationCount: number;
+	evidenceCount: number;
 }
 
 type TokenAssetSummary = {
@@ -116,9 +133,14 @@ type TokenAssetSummary = {
 	firstAcquiredAt: string;
 	peakBalance: string;
 	peakBalanceAt: string;
+	historicalTotalInText: string;
+	historicalTotalOutText: string;
+	flowCoverage: MolianAssetFlowCoverage;
 	proofSummary: string;
 	sampleEvidenceRows: MolianEvidenceSampleRow[];
 };
+
+type MolianAssetMarketPriceResult = Awaited<ReturnType<typeof resolveMolianAssetMarketPrice>>;
 
 function normalizeAddress(address: string): string {
 	return address.trim().toLowerCase();
@@ -189,6 +211,51 @@ function dedupeEvidenceRows(rows: MolianEvidenceSampleRow[]): MolianEvidenceSamp
 	return deduped;
 }
 
+function buildProgressSnapshot(report: MolianAssetProofReport): MolianAssetProofProgressSnapshot {
+	return {
+		chain: report.reportMeta.chain,
+		totalTxCount: report.addressProfile.totalTxCount,
+		tokenTransferCount: report.addressProfile.tokenTransferCount,
+		currentNativeBalance: report.addressProfile.currentNativeBalance,
+		assetCount: report.assetProofItems.length,
+		participationCount: report.participationItems.length,
+		evidenceCount: report.evidenceSamples.length,
+	};
+}
+
+function formatAssetFlowText(amount: string | undefined, symbol: string): string {
+	const trimmed = amount?.trim();
+	return trimmed ? `${trimmed} ${symbol}` : "";
+}
+
+function summarizeSampleFlowAmounts(rows: MolianEvidenceSampleRow[]): { totalInText: string; totalOutText: string } {
+	if (rows.length === 0) {
+		return { totalInText: "", totalOutText: "" };
+	}
+
+	let totalIn = 0;
+	let totalOut = 0;
+	let unit = "";
+	for (const row of rows) {
+		const [amountText = "0", rowUnit = ""] = row.amountText.trim().split(/\s+/u);
+		const amount = Number.parseFloat(amountText.replaceAll(",", ""));
+		if (!Number.isFinite(amount)) {
+			continue;
+		}
+		unit ||= rowUnit;
+		if (row.direction === "in") {
+			totalIn += amount;
+		} else if (row.direction === "out") {
+			totalOut += amount;
+		}
+	}
+
+	return {
+		totalInText: unit ? `${formatDecimalValue(totalIn)} ${unit}` : "",
+		totalOutText: unit ? `${formatDecimalValue(totalOut)} ${unit}` : "",
+	};
+}
+
 function buildEvidenceRowFromTransfer(
 	chain: SupportedChain,
 	row: {
@@ -226,6 +293,21 @@ function estimatePeakBalanceText(
 	assetSymbol: string,
 ): { peakBalance: string; peakBalanceAt: string; highHoldingPeriod: string } {
 	const largestTransfer = overview.transferSummary.largeTransfers?.[0];
+	const currentBalance = Number.parseFloat(overview.balanceSummary.nativeBalance);
+	const largestTransferAmount = largestTransfer ? Number.parseFloat(largestTransfer.amount) : Number.NaN;
+	const shouldUseCurrentBalance =
+		Number.isFinite(currentBalance) &&
+		currentBalance > 0 &&
+		(!Number.isFinite(largestTransferAmount) || currentBalance > largestTransferAmount);
+
+	if (shouldUseCurrentBalance) {
+		return {
+			peakBalance: `${overview.balanceSummary.nativeBalance} ${assetSymbol}`,
+			peakBalanceAt: "",
+			highHoldingPeriod: "",
+		};
+	}
+
 	if (largestTransfer) {
 		return {
 			peakBalance: `${largestTransfer.amount} ${assetSymbol}`,
@@ -241,7 +323,11 @@ function estimatePeakBalanceText(
 	};
 }
 
-function buildNativeAssetItem(chain: SupportedChain, overview: AddressOverview): MolianAssetProofItem {
+function buildNativeAssetItem(
+	chain: SupportedChain,
+	overview: AddressOverview,
+	flowCoverage: MolianAssetFlowCoverage,
+): MolianAssetProofItem {
 	const peak = estimatePeakBalanceText(overview, overview.balanceSummary.nativeSymbol);
 	const evidenceRows = dedupeEvidenceRows(
 		(overview.transferSummary.largeTransfers ?? []).map((transfer, index) =>
@@ -260,6 +346,7 @@ function buildNativeAssetItem(chain: SupportedChain, overview: AddressOverview):
 			}),
 		),
 	);
+	const sampleFlowTotals = summarizeSampleFlowAmounts(evidenceRows);
 
 	return {
 		assetSymbol: overview.balanceSummary.nativeSymbol,
@@ -271,6 +358,20 @@ function buildNativeAssetItem(chain: SupportedChain, overview: AddressOverview):
 		peakBalanceAt: peak.peakBalanceAt,
 		highHoldingPeriod: peak.highHoldingPeriod,
 		historicalShareOfPortfolio: "核心原生资产",
+		currentPriceUsd: "0",
+		currentValueUsd: "0",
+		priceSource: "unavailable",
+		priceStatus: "unavailable",
+		quoteSymbolNormalized: `${overview.balanceSummary.nativeSymbol.toUpperCase()}USDT`,
+		historicalTotalInText: formatAssetFlowText(
+			overview.transferSummary.totalIn ?? sampleFlowTotals.totalInText.split(/\s+/u)[0],
+			overview.balanceSummary.nativeSymbol,
+		),
+		historicalTotalOutText: formatAssetFlowText(
+			overview.transferSummary.totalOut ?? sampleFlowTotals.totalOutText.split(/\s+/u)[0],
+			overview.balanceSummary.nativeSymbol,
+		),
+		flowCoverage,
 		proofSummary: "基于原生资产历史转账与活跃窗口生成。",
 		sampleEvidenceRows: evidenceRows,
 	};
@@ -291,6 +392,8 @@ function buildTokenAssetSummaries(
 			firstSeenAt?: string;
 			firstAcquiredAt?: string;
 			balance: bigint;
+			totalIn: bigint;
+			totalOut: bigint;
 			peakBalance: bigint;
 			peakBalanceAt?: string;
 			rows: MolianEvidenceSampleRow[];
@@ -316,6 +419,8 @@ function buildTokenAssetSummaries(
 				name: transfer.tokenName?.trim() || symbol,
 				decimals,
 				balance: 0n,
+				totalIn: 0n,
+				totalOut: 0n,
 				peakBalance: 0n,
 				rows: [],
 			};
@@ -325,6 +430,12 @@ function buildTokenAssetSummaries(
 		entry.firstSeenAt ??= timestamp;
 		if (incoming && !entry.firstAcquiredAt) {
 			entry.firstAcquiredAt = timestamp;
+		}
+		if (incoming) {
+			entry.totalIn += rawValue;
+		}
+		if (outgoing) {
+			entry.totalOut += rawValue;
 		}
 
 		entry.balance += incoming ? rawValue : -rawValue;
@@ -362,6 +473,9 @@ function buildTokenAssetSummaries(
 				firstAcquiredAt: entry.firstAcquiredAt ?? "",
 				peakBalance,
 				peakBalanceAt: entry.peakBalanceAt ?? "",
+				historicalTotalInText: `${formatTokenAmount(entry.totalIn, entry.decimals)} ${entry.symbol}`,
+				historicalTotalOutText: `${formatTokenAmount(entry.totalOut, entry.decimals)} ${entry.symbol}`,
+				flowCoverage: "complete" as const,
 				proofSummary: `观测到 ${entry.symbol} 历史转账样本，可辅助证明该地址曾持有相关资产。`,
 				sampleEvidenceRows: dedupeEvidenceRows(entry.rows).slice(0, 3),
 			};
@@ -385,6 +499,14 @@ function buildTokenAssetItems(tokenSummaries: TokenAssetSummary[]): MolianAssetP
 		peakBalanceAt: summary.peakBalanceAt,
 		highHoldingPeriod: summary.peakBalanceAt ? summary.peakBalanceAt.slice(0, 7) : "",
 		historicalShareOfPortfolio: "脚本回放样本估算",
+		currentPriceUsd: "0",
+		currentValueUsd: "0",
+		priceSource: "unavailable",
+		priceStatus: "unavailable",
+		quoteSymbolNormalized: `${summary.assetSymbol.toUpperCase()}USDT`,
+		historicalTotalInText: summary.historicalTotalInText,
+		historicalTotalOutText: summary.historicalTotalOutText,
+		flowCoverage: summary.flowCoverage,
 		proofSummary: summary.proofSummary,
 		sampleEvidenceRows: summary.sampleEvidenceRows,
 	}));
@@ -426,7 +548,32 @@ function deriveDeterministicGrade(report: MolianAssetProofReport): MolianReportG
 	return "inconclusive";
 }
 
+function isEmptyEvmReport(report: MolianAssetProofReport): boolean {
+	if (report.reportMeta.chain !== "eth" && report.reportMeta.chain !== "bsc") {
+		return false;
+	}
+
+	return (
+		(report.addressProfile.totalTxCount ?? 0) === 0 &&
+		(report.addressProfile.tokenTransferCount ?? 0) === 0 &&
+		report.evidenceSamples.length === 0
+	);
+}
+
 function fillDeterministicSummary(report: MolianAssetProofReport): void {
+	if (isEmptyEvmReport(report)) {
+		report.executiveSummary.overallGrade = "inconclusive";
+		report.executiveSummary.keyAssets = [];
+		report.executiveSummary.topFindings = [
+			"所选链上未观测到交易记录。",
+			"如预期该地址应有活动，优先复核链选择与链上 API 配置。",
+		];
+		report.executiveSummary.evidenceStrengthNote =
+			"当前所选链上没有形成可核验的交易证据，优先复核链选择与链上 API 配置。";
+		report.executiveSummary.coreConclusion = "所选链上未观察到有效交易活动，当前无法形成资产证明结论。";
+		return;
+	}
+
 	const grade = deriveDeterministicGrade(report);
 	report.executiveSummary.overallGrade = grade;
 	report.executiveSummary.keyAssets = report.assetProofItems.map((item) => item.assetSymbol).slice(0, 5);
@@ -462,6 +609,74 @@ function fillDeterministicSummary(report: MolianAssetProofReport): void {
 					: "当前链上样本不足，暂无法判断资产证明力度。";
 }
 
+function formatDecimalValue(value: number): string {
+	if (!Number.isFinite(value)) {
+		return "0";
+	}
+	return value
+		.toFixed(2)
+		.replace(/\.00$/u, "")
+		.replace(/(\.\d)0$/u, "$1");
+}
+
+function extractPeakBalanceAmount(peakBalance: string): number {
+	const [amountText = "0"] = peakBalance.trim().split(/\s+/u);
+	const amount = Number.parseFloat(amountText.replaceAll(",", ""));
+	return Number.isFinite(amount) ? amount : 0;
+}
+
+function hasPositiveNumericText(value: string | undefined): boolean {
+	const parsed = Number.parseFloat(value?.trim() ?? "");
+	return Number.isFinite(parsed) && parsed > 0;
+}
+
+function appendReportSources(report: MolianAssetProofReport, nextSources: string[]): void {
+	const currentSources = report.reportMeta.sourceSummary
+		.split(",")
+		.map((item) => item.trim())
+		.filter(Boolean);
+	const mergedSources = Array.from(new Set([...currentSources, ...nextSources.filter(Boolean)]));
+	report.reportMeta.sourceSummary = mergedSources.join(", ");
+}
+
+async function applyAssetMarketPrices(
+	report: MolianAssetProofReport,
+	providerOverrides: MolianReportProviderOverrides,
+): Promise<void> {
+	const resolvePrice = providerOverrides.marketPrice ?? resolveMolianAssetMarketPrice;
+	const cachedQuotes = new Map<string, Promise<MolianAssetMarketPriceResult>>();
+	const priceSources = new Set<string>();
+
+	for (const item of report.assetProofItems) {
+		const cacheKey = item.assetSymbol.toUpperCase();
+		let quotePromise = cachedQuotes.get(cacheKey);
+		if (!quotePromise) {
+			quotePromise = Promise.resolve(resolvePrice(item.assetSymbol));
+			cachedQuotes.set(cacheKey, quotePromise);
+		}
+		const quote = await quotePromise;
+		item.currentPriceUsd = quote.currentPriceUsd;
+		item.priceSource = quote.priceSource;
+		item.priceStatus = quote.priceStatus;
+		item.quoteSymbolNormalized = quote.quoteSymbolNormalized;
+		item.currentValueUsd = formatDecimalValue(
+			extractPeakBalanceAmount(item.peakBalance) * Number.parseFloat(quote.currentPriceUsd),
+		);
+		if (item.assetCategory !== "stablecoin" && quote.priceStatus === "unavailable") {
+			item.proofGrade = "weak_support";
+		}
+		if (quote.priceSource === "binance") {
+			priceSources.add("binance_spot");
+		} else if (quote.priceSource === "okx") {
+			priceSources.add("okx_spot");
+		} else if (quote.priceSource === "stablecoin_fallback") {
+			priceSources.add("stablecoin_fallback");
+		}
+	}
+
+	appendReportSources(report, Array.from(priceSources));
+}
+
 function sanitizeNarratorPatch(
 	patch: MolianAgentSummaryPatch,
 	report: MolianAssetProofReport,
@@ -488,26 +703,6 @@ function sanitizeNarratorPatch(
 				.filter((item) => item && knownAssets.has(item))
 				.slice(0, 5) ?? undefined,
 		evidenceStrengthNote: patch.evidenceStrengthNote?.trim() || undefined,
-		coverageLimitations:
-			patch.coverageLimitations
-				?.map((item) => item.trim())
-				.filter(Boolean)
-				.slice(0, 5) ?? undefined,
-		missingDataPoints:
-			patch.missingDataPoints
-				?.map((item) => item.trim())
-				.filter(Boolean)
-				.slice(0, 5) ?? undefined,
-		assumptionNotes:
-			patch.assumptionNotes
-				?.map((item) => item.trim())
-				.filter(Boolean)
-				.slice(0, 5) ?? undefined,
-		cannotConcludeItems:
-			patch.cannotConcludeItems
-				?.map((item) => item.trim())
-				.filter(Boolean)
-				.slice(0, 5) ?? undefined,
 	};
 }
 
@@ -545,10 +740,6 @@ async function maybeApplyNarratorSummary(
 	if (patch.topFindings) report.executiveSummary.topFindings = patch.topFindings;
 	if (patch.keyAssets) report.executiveSummary.keyAssets = patch.keyAssets;
 	if (patch.evidenceStrengthNote) report.executiveSummary.evidenceStrengthNote = patch.evidenceStrengthNote;
-	if (patch.coverageLimitations) report.limitations.coverageLimitations = patch.coverageLimitations;
-	if (patch.missingDataPoints) report.limitations.missingDataPoints = patch.missingDataPoints;
-	if (patch.assumptionNotes) report.limitations.assumptionNotes = patch.assumptionNotes;
-	if (patch.cannotConcludeItems) report.limitations.cannotConcludeItems = patch.cannotConcludeItems;
 	return Object.values(patch).some((value) => value !== undefined);
 }
 
@@ -557,7 +748,7 @@ function buildAgentSummaryPrompt(report: MolianAssetProofReport): string {
 		"你是链上资产证明报告的摘要器。",
 		"只能基于给定 JSON 生成摘要，不得发明新的交易哈希、链接、金额、地址或项目事实。",
 		"输出严格 JSON，不要 markdown，不要解释。",
-		"允许的键：overallGrade, coreConclusion, topFindings, keyAssets, evidenceStrengthNote, coverageLimitations, missingDataPoints, assumptionNotes, cannotConcludeItems。",
+		"允许的键：overallGrade, coreConclusion, topFindings, keyAssets, evidenceStrengthNote。",
 		"overallGrade 只能是 strong_support, moderate_support, weak_support, inconclusive。",
 		"topFindings 最多 5 条，keyAssets 只能从现有重点资产里挑选。",
 		JSON.stringify(report, null, 2),
@@ -614,22 +805,39 @@ async function buildEvmReport(
 	authStorage: AuthStorage,
 	chain: MolianEvmChain,
 	providerOverrides: MolianReportProviderOverrides,
+	onProgress?: (event: MolianAssetProofProgressEvent) => void,
 ): Promise<void> {
 	const config = resolveMolianEvmProviderConfig(authStorage, chain);
+	onProgress?.({
+		stage: "collecting_data",
+		message: `Collecting ${chain.toUpperCase()} native overview...`,
+		snapshot: buildProgressSnapshot(report),
+	});
 	const overview = await (providerOverrides.evmOverview ?? getEvmAddressOverview)(
 		config,
 		chain,
 		report.reportMeta.targetAddress,
 	);
+	onProgress?.({
+		stage: "collecting_data",
+		message: `Collecting ${chain.toUpperCase()} token transfer history...`,
+		snapshot: buildProgressSnapshot(report),
+	});
 	const tokenTransfers = await (providerOverrides.evmTokenTransfers ?? getEvmTokenTransfers)(
 		config,
 		chain,
 		report.reportMeta.targetAddress,
 	);
 
-	const nativeItem = buildNativeAssetItem(chain, overview);
+	const nativeItem = buildNativeAssetItem(chain, overview, "complete");
 	const tokenSummaries = buildTokenAssetSummaries(chain, report.reportMeta.targetAddress, tokenTransfers);
 	const tokenItems = buildTokenAssetItems(tokenSummaries);
+	const includeNativeItem =
+		overview.activitySummary.txCount > 0 ||
+		hasPositiveNumericText(overview.balanceSummary.nativeBalance) ||
+		hasPositiveNumericText(overview.transferSummary.totalIn) ||
+		hasPositiveNumericText(overview.transferSummary.totalOut) ||
+		(overview.transferSummary.largeTransfers?.length ?? 0) > 0;
 
 	report.addressProfile.firstActivityAt = overview.activitySummary.firstSeenAt;
 	report.addressProfile.lastActivityAt = overview.activitySummary.lastSeenAt;
@@ -645,27 +853,30 @@ async function buildEvmReport(
 	report.addressProfile.activityCharacterization =
 		tokenTransfers.length > 0 ? "检测到原生资产与代币层面的双重链上活动。" : "当前仅检测到原生资产层面的链上活动。";
 
-	report.assetProofItems = [nativeItem, ...tokenItems];
+	report.assetProofItems = includeNativeItem ? [nativeItem, ...tokenItems] : tokenItems;
 	report.participationItems = buildParticipationItems(tokenSummaries);
 	report.evidenceSamples = dedupeEvidenceRows([
 		...nativeItem.sampleEvidenceRows,
 		...tokenItems.flatMap((item) => item.sampleEvidenceRows),
 	]).slice(0, 8);
-	report.limitations.coverageLimitations = [...overview.sourceMeta.notes];
-	report.limitations.cannotConcludeItems = ["当前脚本未回放完整历史余额曲线，峰值为样本近似值。"];
-	report.appendix.dataSources = [overview.sourceMeta.provider, "evm_token_transfers"];
 	report.reportMeta.sourceSummary = `${overview.sourceMeta.provider}, evm_token_transfers`;
 }
 
 async function buildBtcReport(
 	report: MolianAssetProofReport,
 	providerOverrides: MolianReportProviderOverrides,
+	onProgress?: (event: MolianAssetProofProgressEvent) => void,
 ): Promise<void> {
+	onProgress?.({
+		stage: "collecting_data",
+		message: "Collecting BTC address overview...",
+		snapshot: buildProgressSnapshot(report),
+	});
 	const overview = await (providerOverrides.btcOverview ?? getBtcAddressOverview)(
 		resolveMolianBtcProviderConfig(),
 		report.reportMeta.targetAddress,
 	);
-	const nativeItem = buildNativeAssetItem("btc", overview);
+	const nativeItem = buildNativeAssetItem("btc", overview, "complete");
 
 	report.addressProfile.firstActivityAt = overview.activitySummary.firstSeenAt;
 	report.addressProfile.lastActivityAt = overview.activitySummary.lastSeenAt;
@@ -680,9 +891,6 @@ async function buildBtcReport(
 
 	report.assetProofItems = [nativeItem];
 	report.evidenceSamples = nativeItem.sampleEvidenceRows;
-	report.limitations.coverageLimitations = [...overview.sourceMeta.notes];
-	report.limitations.cannotConcludeItems = ["当前未提供代币层或链下资金信息。"];
-	report.appendix.dataSources = [overview.sourceMeta.provider];
 	report.reportMeta.sourceSummary = overview.sourceMeta.provider;
 }
 
@@ -690,12 +898,18 @@ async function buildTronReport(
 	report: MolianAssetProofReport,
 	authStorage: AuthStorage,
 	providerOverrides: MolianReportProviderOverrides,
+	onProgress?: (event: MolianAssetProofProgressEvent) => void,
 ): Promise<void> {
+	onProgress?.({
+		stage: "collecting_data",
+		message: "Collecting TRON native overview...",
+		snapshot: buildProgressSnapshot(report),
+	});
 	const overview = await (providerOverrides.tronOverview ?? getTronAddressOverview)(
 		resolveMolianTronProviderConfig(authStorage),
 		report.reportMeta.targetAddress,
 	);
-	const nativeItem = buildNativeAssetItem("tron", overview);
+	const nativeItem = buildNativeAssetItem("tron", overview, "sampled");
 
 	report.addressProfile.firstActivityAt = overview.activitySummary.firstSeenAt;
 	report.addressProfile.lastActivityAt = overview.activitySummary.lastSeenAt;
@@ -710,9 +924,6 @@ async function buildTronReport(
 
 	report.assetProofItems = [nativeItem];
 	report.evidenceSamples = nativeItem.sampleEvidenceRows;
-	report.limitations.coverageLimitations = [...overview.sourceMeta.notes];
-	report.limitations.cannotConcludeItems = ["当前未回放 TRC20 层面的完整资产历史。"];
-	report.appendix.dataSources = [overview.sourceMeta.provider];
 	report.reportMeta.sourceSummary = overview.sourceMeta.provider;
 }
 
@@ -723,7 +934,6 @@ export async function buildMolianAssetProofReport(
 	const report = createMolianAssetProofReportTemplate({
 		targetAddress: options.address,
 		chain: options.chain,
-		subjectName: options.subjectName,
 	});
 	report.reportMeta.generatedAt = options.generatedAt ?? new Date().toISOString();
 	report.reportMeta.dataAsOf = options.dataAsOf ?? report.reportMeta.generatedAt;
@@ -731,18 +941,19 @@ export async function buildMolianAssetProofReport(
 	switch (options.chain) {
 		case "eth":
 		case "bsc":
-			await buildEvmReport(report, authStorage, options.chain, options.providerOverrides ?? {});
+			await buildEvmReport(report, authStorage, options.chain, options.providerOverrides ?? {}, options.onProgress);
 			break;
 		case "btc":
-			await buildBtcReport(report, options.providerOverrides ?? {});
+			await buildBtcReport(report, options.providerOverrides ?? {}, options.onProgress);
 			break;
 		case "tron":
-			await buildTronReport(report, authStorage, options.providerOverrides ?? {});
+			await buildTronReport(report, authStorage, options.providerOverrides ?? {}, options.onProgress);
 			break;
 		case "sol":
 			throw new Error("SOL asset-proof workflow is not implemented yet.");
 	}
 
+	await applyAssetMarketPrices(report, options.providerOverrides ?? {});
 	fillDeterministicSummary(report);
 	return report;
 }
@@ -767,15 +978,16 @@ export async function exportMolianAssetProofReport(
 	const report = await buildMolianAssetProofReport({
 		address: options.address,
 		chain: options.chain,
-		subjectName: options.subjectName,
 		authStorage,
 		generatedAt: options.generatedAt,
 		dataAsOf: options.dataAsOf,
+		onProgress: options.onProgress,
 		providerOverrides: options.providerOverrides,
 	});
 	options.onProgress?.({
 		stage: "building_report",
 		message: "Building quantitative report structure...",
+		snapshot: buildProgressSnapshot(report),
 	});
 
 	let narrator = options.narrator;
@@ -793,24 +1005,23 @@ export async function exportMolianAssetProofReport(
 		options.onProgress?.({
 			stage: "agent_summary",
 			message: "Applying agent summary guard...",
+			snapshot: buildProgressSnapshot(report),
 		});
 		try {
 			usedAgentSummary = await maybeApplyNarratorSummary(report, narrator);
-		} catch (error) {
-			report.limitations.assumptionNotes.push(
-				`Agent summary unavailable: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
+		} catch {}
 	}
 	options.onProgress?.({
 		stage: "rendering_html",
 		message: "Rendering HTML report...",
+		snapshot: buildProgressSnapshot(report),
 	});
 	const html = renderMolianAssetProofReportHtml(report);
 	const finalOutputPath = resolveOutputPath(cwd, options.outputPath, report);
 	options.onProgress?.({
 		stage: "writing_file",
 		message: `Writing report file to ${finalOutputPath}...`,
+		snapshot: buildProgressSnapshot(report),
 	});
 	await mkdir(dirname(finalOutputPath), { recursive: true });
 	await writeFile(finalOutputPath, html, "utf-8");

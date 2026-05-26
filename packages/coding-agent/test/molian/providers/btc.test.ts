@@ -84,4 +84,50 @@ describe("getBtcAddressOverview", () => {
 		);
 		expect(overview.sourceMeta.provider).toBe("mempool.space");
 	});
+
+	it("does not claim an exact first activity time from an incomplete recent transaction sample", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(
+				Response.json({
+					address: "16G1xYBbiNG78LSuZdMqp6tux5xvVp9Wxh",
+					chain_stats: {
+						tx_count: 96673,
+						funded_txo_sum: 94033318119,
+						spent_txo_sum: 93809955942,
+					},
+					mempool_stats: {
+						tx_count: 0,
+						funded_txo_sum: 0,
+						spent_txo_sum: 0,
+					},
+				}),
+			)
+			.mockResolvedValueOnce(
+				Response.json([
+					{
+						txid: "newest-1",
+						status: { confirmed: true, block_time: 1779777381 },
+						vin: [],
+						vout: [{ scriptpubkey_address: "16G1xYBbiNG78LSuZdMqp6tux5xvVp9Wxh", value: 546 }],
+					},
+					{
+						txid: "newest-25",
+						status: { confirmed: true, block_time: 1779500000 },
+						vin: [],
+						vout: [{ scriptpubkey_address: "16G1xYBbiNG78LSuZdMqp6tux5xvVp9Wxh", value: 546 }],
+					},
+				]),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const overview = await getBtcAddressOverview(
+			{ baseUrl: "https://mempool.space/api" },
+			"16G1xYBbiNG78LSuZdMqp6tux5xvVp9Wxh",
+		);
+
+		expect(overview.activitySummary.firstSeenAt).toBeUndefined();
+		expect(overview.activitySummary.lastSeenAt).toBe("2026-05-26T06:36:21.000Z");
+		expect(overview.sourceMeta.partial).toBe(true);
+	});
 });

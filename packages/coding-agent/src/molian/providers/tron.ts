@@ -34,8 +34,8 @@ interface TronTransactionsResponse {
 	data?: TronTransaction[];
 }
 
-function sunToTrx(value: number): string {
-	const sun = BigInt(value);
+function sunToTrx(value: number | bigint): string {
+	const sun = typeof value === "bigint" ? value : BigInt(value);
 	const whole = sun / 1000000n;
 	const fractional = sun % 1000000n;
 	if (fractional === 0n) {
@@ -126,6 +126,31 @@ function getLargeTransfers(
 		.map(({ rawValue: _rawValue, ...transfer }) => transfer);
 }
 
+function summarizeTransferTotals(address: string, txs: TronTransaction[]): { totalIn: string; totalOut: string } {
+	const normalizedAddress = address.toLowerCase();
+	let totalInSun = 0n;
+	let totalOutSun = 0n;
+	for (const tx of txs) {
+		const value = tx.raw_data?.contract?.[0]?.parameter?.value;
+		const amount = BigInt(value?.amount ?? 0);
+		if (amount <= 0n) {
+			continue;
+		}
+		const from = value?.owner_address?.toLowerCase();
+		const to = value?.to_address?.toLowerCase();
+		if (to === normalizedAddress) {
+			totalInSun += amount;
+		}
+		if (from === normalizedAddress) {
+			totalOutSun += amount;
+		}
+	}
+	return {
+		totalIn: sunToTrx(totalInSun),
+		totalOut: sunToTrx(totalOutSun),
+	};
+}
+
 export async function getTronAddressOverview(
 	config: MolianTronProviderConfig,
 	address: string,
@@ -151,6 +176,7 @@ export async function getTronAddressOverview(
 	const txs = txsResponse.data ?? [];
 	const firstTimestamp = getTxTimestamp(txs[0]);
 	const lastTimestamp = getTxTimestamp(txs[txs.length - 1]);
+	const transferTotals = summarizeTransferTotals(address, txs);
 
 	return {
 		chain: "tron",
@@ -169,6 +195,8 @@ export async function getTronAddressOverview(
 					: undefined,
 		},
 		transferSummary: {
+			totalIn: transferTotals.totalIn,
+			totalOut: transferTotals.totalOut,
 			largeTransfers: getLargeTransfers(address, txs),
 		},
 		counterparties: getCounterparties(address, txs),

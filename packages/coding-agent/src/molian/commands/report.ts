@@ -1,5 +1,14 @@
-import type { ExtensionCommandContext } from "../../core/extensions/index.ts";
-import { exportMolianAssetProofReport, isSupportedMolianReportChain } from "../asset-proof-workflow.ts";
+import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/index.ts";
+import {
+	exportMolianAssetProofReport,
+	isSupportedMolianReportChain,
+	type MolianAssetProofProgressEvent,
+} from "../asset-proof-workflow.ts";
+import {
+	createMolianReportProgressMessage,
+	formatMolianReportProgressWidgetLines,
+	updateMolianReportProgress,
+} from "../report-progress.ts";
 import type { SupportedChain } from "../tools/types.ts";
 
 export interface ParsedMolianReportArgs {
@@ -34,6 +43,7 @@ export function parseMolianReportArgs(rawArgs: string): ParsedMolianReportArgs |
 }
 
 export async function handleMolianReportCommand(
+	pi: Pick<ExtensionAPI, "sendMessage">,
 	rawArgs: string,
 	ctx: ExtensionCommandContext,
 	deps: MolianReportCommandDeps = DEFAULT_DEPS,
@@ -45,6 +55,15 @@ export async function handleMolianReportCommand(
 	}
 
 	try {
+		const progressOrder: MolianAssetProofProgressEvent["stage"][] = [
+			"collecting_data",
+			"building_report",
+			"agent_summary",
+			"rendering_html",
+			"writing_file",
+		];
+		const runId = `report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		let progressMessageSent = false;
 		const result = await deps.exportReport({
 			address: parsed.address,
 			chain: parsed.chain,
@@ -55,17 +74,33 @@ export async function handleMolianReportCommand(
 			model: ctx.model ?? undefined,
 			enableAgentSummary: true,
 			onProgress: (event) => {
+				const details = {
+					...event,
+					runId,
+					index: progressOrder.indexOf(event.stage) + 1,
+					total: progressOrder.length,
+				};
+				updateMolianReportProgress(details);
 				ctx.ui.setStatus("molian.report", event.message);
+				ctx.ui.setWidget("molian.report.progress", formatMolianReportProgressWidgetLines(details), {
+					placement: "belowEditor",
+				});
+				if (!progressMessageSent) {
+					progressMessageSent = true;
+					pi.sendMessage(createMolianReportProgressMessage(details));
+				}
 			},
 		});
 
 		ctx.ui.setStatus("molian.report", undefined);
+		ctx.ui.setWidget("molian.report.progress", undefined, { placement: "belowEditor" });
 		ctx.ui.notify(
 			`Asset-proof report exported to ${result.outputPath}${result.usedAgentSummary ? " (agent summary applied)." : "."}`,
 			"info",
 		);
 	} catch (error) {
 		ctx.ui.setStatus("molian.report", undefined);
+		ctx.ui.setWidget("molian.report.progress", undefined, { placement: "belowEditor" });
 		ctx.ui.notify(
 			`Failed to export asset-proof report: ${error instanceof Error ? error.message : String(error)}`,
 			"error",
