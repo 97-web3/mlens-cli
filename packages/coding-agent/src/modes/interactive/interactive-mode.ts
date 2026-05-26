@@ -121,6 +121,7 @@ import { ScopedModelsSelectorComponent } from "./components/scoped-models-select
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
+import { StartupBrandComponent, shouldRenderLargeStartupBrand } from "./components/startup-brand.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
@@ -613,8 +614,6 @@ export class InteractiveMode {
 
 		// Add header with keybindings from config (unless silenced)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
-			const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
-
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
 
@@ -651,9 +650,15 @@ export class InteractiveMode {
 				`Press ${keyText("app.tools.expand")} to show full startup help and loaded resources.`,
 			);
 			const onboarding = theme.fg("dim", ONBOARDING_BLURB);
+			const headerText = shouldRenderLargeStartupBrand()
+				? `${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`
+				: `${theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`)}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`;
+			const expandedHeaderText = shouldRenderLargeStartupBrand()
+				? `${expandedInstructions}\n\n${onboarding}`
+				: `${theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`)}\n${expandedInstructions}\n\n${onboarding}`;
 			this.builtInHeader = new ExpandableText(
-				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
-				() => `${logo}\n${expandedInstructions}\n\n${onboarding}`,
+				() => headerText,
+				() => expandedHeaderText,
 				this.getStartupExpansionState(),
 				1,
 				0,
@@ -661,6 +666,9 @@ export class InteractiveMode {
 
 			// Setup UI layout
 			this.headerContainer.addChild(new Spacer(1));
+			if (shouldRenderLargeStartupBrand()) {
+				this.headerContainer.addChild(new StartupBrandComponent(this.ui, this.version));
+			}
 			this.headerContainer.addChild(this.builtInHeader);
 			this.headerContainer.addChild(new Spacer(1));
 		} else {

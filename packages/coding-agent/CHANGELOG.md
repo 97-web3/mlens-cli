@@ -5,6 +5,7 @@
 ### Added
 
 - Added optional `baseUrl` prompts to `/login` for OpenAI and Anthropic API-key auth, storing endpoint overrides in `models.json` while keeping API keys in `auth.json`.
+- Added a centered large-color startup brand banner for the Molian (`mlens`) interactive TUI.
 
 ### Fixed
 
