@@ -1,7 +1,8 @@
 import { accessSync, constants, existsSync, readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
-import { basename, dirname, join, resolve, sep, win32 } from "path";
+import { basename, dirname, extname, join, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
+import { MOLIAN_APP_PROFILE } from "./molian/profile.ts";
 import { spawnProcessSync } from "./utils/child-process.ts";
 import { normalizePath } from "./utils/paths.ts";
 
@@ -439,13 +440,63 @@ interface PackageJson {
 	};
 }
 
+export interface AppProfile {
+	id: string;
+	appName: string;
+	appTitle: string;
+	configDirName: string;
+	exportNamePrefix: string;
+	helpTagline: string;
+	onboardingBlurb: string;
+	shareViewerUrl?: string;
+}
+
 const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson;
 
 const piConfigName: string | undefined = pkg.piConfig?.name;
+const DEFAULT_APP_PROFILE: AppProfile = {
+	id: "pi",
+	appName: piConfigName || "pi",
+	appTitle: piConfigName || "π",
+	configDirName: pkg.piConfig?.configDir || ".pi",
+	exportNamePrefix: piConfigName || "pi",
+	helpTagline: "AI coding assistant with read, bash, edit, write tools",
+	onboardingBlurb: "Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.",
+	shareViewerUrl: "https://pi.dev/session/",
+};
+
+const BUILTIN_APP_PROFILES = new Map<string, AppProfile>([
+	[DEFAULT_APP_PROFILE.id, DEFAULT_APP_PROFILE],
+	[MOLIAN_APP_PROFILE.id, MOLIAN_APP_PROFILE],
+]);
+
+function inferAppProfileIdFromEntrypoint(): string | undefined {
+	const entrypoint = process.argv[1];
+	if (!entrypoint) {
+		return undefined;
+	}
+
+	const normalizedEntrypoint = normalizePath(entrypoint).toLowerCase();
+	const entrypointBasename = basename(normalizedEntrypoint, extname(normalizedEntrypoint));
+	if (entrypointBasename === "mlens" || normalizedEntrypoint.includes("/molian/")) {
+		return MOLIAN_APP_PROFILE.id;
+	}
+
+	return undefined;
+}
+
+export function getAppProfile(): AppProfile {
+	const requestedProfileId = process.env.PI_APP_PROFILE ?? inferAppProfileIdFromEntrypoint();
+	return BUILTIN_APP_PROFILES.get(requestedProfileId ?? DEFAULT_APP_PROFILE.id) ?? DEFAULT_APP_PROFILE;
+}
+
 export const PACKAGE_NAME: string = pkg.name || "@earendil-works/pi-coding-agent";
-export const APP_NAME: string = piConfigName || "pi";
-export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
-export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
+export const APP_NAME: string = getAppProfile().appName;
+export const APP_TITLE: string = getAppProfile().appTitle;
+export const CONFIG_DIR_NAME: string = getAppProfile().configDirName;
+export const EXPORT_NAME_PREFIX: string = getAppProfile().exportNamePrefix;
+export const HELP_TAGLINE: string = getAppProfile().helpTagline;
+export const ONBOARDING_BLURB: string = getAppProfile().onboardingBlurb;
 export const VERSION: string = pkg.version || "0.0.0";
 
 // e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
@@ -456,11 +507,10 @@ export function expandTildePath(path: string): string {
 	return normalizePath(path);
 }
 
-const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
-
 /** Get the share viewer URL for a gist ID */
 export function getShareViewerUrl(gistId: string): string {
-	const baseUrl = process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
+	const baseUrl =
+		process.env.PI_SHARE_VIEWER_URL || getAppProfile().shareViewerUrl || DEFAULT_APP_PROFILE.shareViewerUrl;
 	return `${baseUrl}#${gistId}`;
 }
 

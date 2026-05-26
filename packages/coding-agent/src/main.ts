@@ -30,6 +30,7 @@ import { KeybindingsManager } from "./core/keybindings.ts";
 import type { ModelRegistry } from "./core/model-registry.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
+import type { DefaultResourceLoaderOptions } from "./core/resource-loader.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -419,6 +420,7 @@ async function promptForMissingSessionCwd(
 
 export interface MainOptions {
 	extensionFactories?: ExtensionFactory[];
+	resourceLoaderOptions?: Omit<DefaultResourceLoaderOptions, "cwd" | "agentDir" | "settingsManager">;
 }
 
 export async function main(args: string[], options?: MainOptions) {
@@ -548,6 +550,7 @@ export async function main(args: string[], options?: MainOptions) {
 				systemPrompt: parsed.systemPrompt,
 				appendSystemPrompt: parsed.appendSystemPrompt,
 				extensionFactories: options?.extensionFactories,
+				...(options?.resourceLoaderOptions ?? {}),
 			},
 		});
 		const { settingsManager, modelRegistry, resourceLoader } = services;

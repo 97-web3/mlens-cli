@@ -1,7 +1,8 @@
 // Core session management
 
+export type { AppProfile } from "./config.ts";
 // Config paths
-export { getAgentDir, VERSION } from "./config.ts";
+export { getAgentDir, getAppProfile, VERSION } from "./config.ts";
 export {
 	AgentSession,
 	type AgentSessionConfig,
