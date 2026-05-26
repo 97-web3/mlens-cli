@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { BUILTIN_SLASH_COMMANDS } from "../../src/core/slash-commands.ts";
 import { handleMolianReportCommand, parseMolianReportArgs } from "../../src/molian/commands/report.ts";
 
 describe("molian report command", () => {
+	it("is listed as a built-in slash command for interactive autocomplete", () => {
+		expect(BUILTIN_SLASH_COMMANDS.map((command) => command.name)).toContain("report");
+	});
+
 	it("parses address chain and optional output path", () => {
 		expect(parseMolianReportArgs("0xabc eth out/report.html")).toEqual({
 			address: "0xabc",
