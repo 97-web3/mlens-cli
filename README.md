@@ -16,6 +16,35 @@
 
 ---
 
+# mlens
+
+`mlens` is a self-contained CLI for on-chain asset proof reports. It bundles a complete coding-agent runtime as a single binary — no Node.js required on your machine.
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/97-web3/mlens-cli/main/install.sh | bash
+```
+
+Supported platforms:
+- macOS — Apple Silicon (`darwin-arm64`) and Intel (`darwin-x64`)
+- Linux — x64 and arm64
+
+Windows: download `mlens-windows-x64.zip` or `mlens-windows-arm64.zip` from the [latest release](https://github.com/97-web3/mlens-cli/releases/latest) and unzip.
+
+Environment variables:
+- `MLENS_INSTALL_DIR` — where the binary tree is extracted (default: `~/.mlens`)
+- `MLENS_BIN_DIR` — where the `mlens` wrapper is placed (default: `/usr/local/bin`, falls back to `~/.local/bin`)
+- `MLENS_VERSION` — install a specific release tag (default: `latest`)
+
+After install:
+
+```bash
+mlens --help
+```
+
+---
+
 # Pi Agent Harness Mono Repo
 
 This is the home of the pi agent harness project including our self extensible coding agent.

@@ -15,12 +15,12 @@
 #
 # Output:
 #   packages/coding-agent/binaries/
-#     pi-darwin-arm64.tar.gz
-#     pi-darwin-x64.tar.gz
-#     pi-linux-x64.tar.gz
-#     pi-linux-arm64.tar.gz
-#     pi-windows-x64.zip
-#     pi-windows-arm64.zip
+#     mlens-darwin-arm64.tar.gz
+#     mlens-darwin-x64.tar.gz
+#     mlens-linux-x64.tar.gz
+#     mlens-linux-arm64.tar.gz
+#     mlens-windows-x64.zip
+#     mlens-windows-arm64.zip
 
 set -euo pipefail
 
@@ -132,9 +132,9 @@ for platform in "${PLATFORMS[@]}"; do
     # explicit build entrypoints. The runtime can still use new URL(...), but the
     # worker must be present in the compiled executable.
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi.exe"
+        bun build --compile --target=bun-$platform ./dist/bun/mlens-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/mlens.exe"
     else
-        bun build --compile --target=bun-$platform ./dist/bun/cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
+        bun build --compile --target=bun-$platform ./dist/bun/mlens-cli.js ./src/utils/image-resize-worker.ts --outfile "$OUTPUT_DIR/$platform/mlens"
     fi
 done
 
@@ -200,12 +200,12 @@ cd "$OUTPUT_DIR"
 for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == windows-* ]]; then
         # Windows (zip)
-        echo "Creating pi-$platform.zip..."
-        (cd "$platform" && zip -r ../pi-$platform.zip .)
+        echo "Creating mlens-$platform.zip..."
+        (cd "$platform" && zip -r ../mlens-$platform.zip .)
     else
         # Unix platforms (tar.gz) - use wrapper directory for mise compatibility
-        echo "Creating pi-$platform.tar.gz..."
-        mv "$platform" pi && tar -czf pi-$platform.tar.gz pi && mv pi "$platform"
+        echo "Creating mlens-$platform.tar.gz..."
+        mv "$platform" mlens && tar -czf mlens-$platform.tar.gz mlens && mv mlens "$platform"
     fi
 done
 
@@ -214,9 +214,9 @@ echo "==> Extracting archives for testing..."
 for platform in "${PLATFORMS[@]}"; do
     rm -rf "$platform"
     if [[ "$platform" == windows-* ]]; then
-        mkdir -p "$platform" && (cd "$platform" && unzip -q ../pi-$platform.zip)
+        mkdir -p "$platform" && (cd "$platform" && unzip -q ../mlens-$platform.zip)
     else
-        tar -xzf pi-$platform.tar.gz && mv pi "$platform"
+        tar -xzf mlens-$platform.tar.gz && mv mlens "$platform"
     fi
 done
 
@@ -228,8 +228,8 @@ echo ""
 echo "Extracted directories for testing:"
 for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == windows-* ]]; then
-        echo "  $OUTPUT_DIR/$platform/pi.exe"
+        echo "  $OUTPUT_DIR/$platform/mlens.exe"
     else
-        echo "  $OUTPUT_DIR/$platform/pi"
+        echo "  $OUTPUT_DIR/$platform/mlens"
     fi
 done
