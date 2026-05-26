@@ -24,6 +24,9 @@ export interface AddressOverview {
 			amount: string;
 			symbol: string;
 			direction: "in" | "out";
+			txHash?: string;
+			counterpartyAddress?: string;
+			counterpartyLabel?: string;
 		}>;
 	};
 	counterparties: Array<{

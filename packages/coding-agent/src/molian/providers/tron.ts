@@ -115,6 +115,8 @@ function getLargeTransfers(
 				amount: sunToTrx(amount),
 				symbol: "TRX",
 				direction,
+				txHash: tx.txID,
+				counterpartyAddress: direction === "in" ? from : to,
 				rawValue: amount,
 			};
 		})

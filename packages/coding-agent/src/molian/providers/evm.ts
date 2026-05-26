@@ -22,16 +22,41 @@ interface EtherscanTxListResponse {
 	result: EtherscanTx[] | string;
 }
 
+export interface EvmTokenTransfer {
+	timeStamp: string;
+	hash: string;
+	from: string;
+	to: string;
+	value: string;
+	tokenDecimal: string;
+	tokenSymbol: string;
+	tokenName?: string;
+	contractAddress: string;
+}
+
+interface EtherscanTokenTxListResponse {
+	status: string;
+	message: string;
+	result: EvmTokenTransfer[] | string;
+}
+
 function getMissingConfigMessage(chain: "eth" | "bsc"): string {
 	return `Missing ${chain.toUpperCase()} API key. Run /chain-config to configure chain API access.`;
 }
 
-function buildUrl(baseUrl: string, apiKey: string, params: Record<string, string>): string {
-	const url = new URL(baseUrl.replace(/\/+$/, ""));
+function buildChainAwareUrl(
+	config: MolianEvmProviderConfig,
+	chain: "eth" | "bsc",
+	params: Record<string, string>,
+): string {
+	const url = new URL(config.baseUrl.replace(/\/+$/, ""));
 	for (const [key, value] of Object.entries(params)) {
 		url.searchParams.set(key, value);
 	}
-	url.searchParams.set("apikey", apiKey);
+	if (config.baseUrl.includes("/v2/api")) {
+		url.searchParams.set("chainid", chain === "eth" ? "1" : "56");
+	}
+	url.searchParams.set("apikey", config.apiKey);
 	return url.toString();
 }
 
@@ -40,7 +65,7 @@ async function fetchJson<T>(
 	chain: "eth" | "bsc",
 	params: Record<string, string>,
 ): Promise<T> {
-	const response = await fetch(buildUrl(config.baseUrl, config.apiKey, params));
+	const response = await fetch(buildChainAwareUrl(config, chain, params));
 	if (!response.ok) {
 		throw new MolianProviderError({
 			code: "provider_error",
@@ -83,15 +108,19 @@ function uniqueCounterparties(address: string, txs: EtherscanTx[]): AddressOverv
 
 function summarizeLargeTransfers(
 	chain: "eth" | "bsc",
+	address: string,
 	txs: EtherscanTx[],
 ): AddressOverview["transferSummary"]["largeTransfers"] {
 	const symbol = chain === "eth" ? "ETH" : "BNB";
+	const normalizedAddress = address.toLowerCase();
 	return txs
 		.map((tx) => ({
 			timestamp: new Date(Number(tx.timeStamp) * 1000).toISOString(),
 			amount: toNative(tx.value),
 			symbol,
-			direction: "out" as const,
+			direction: tx.to.toLowerCase() === normalizedAddress ? ("in" as const) : ("out" as const),
+			txHash: tx.hash,
+			counterpartyAddress: tx.to.toLowerCase() === normalizedAddress ? tx.from.toLowerCase() : tx.to.toLowerCase(),
 			rawValue: BigInt(tx.value),
 		}))
 		.sort((a, b) => (a.rawValue > b.rawValue ? -1 : a.rawValue < b.rawValue ? 1 : 0))
@@ -153,7 +182,7 @@ export async function getEvmAddressOverview(
 					: undefined,
 		},
 		transferSummary: {
-			largeTransfers: summarizeLargeTransfers(chain, txs),
+			largeTransfers: summarizeLargeTransfers(chain, address, txs),
 		},
 		counterparties: uniqueCounterparties(address, txs),
 		labels: [],
@@ -166,4 +195,33 @@ export async function getEvmAddressOverview(
 			],
 		},
 	};
+}
+
+export async function getEvmTokenTransfers(
+	config: MolianEvmProviderConfig,
+	chain: "eth" | "bsc",
+	address: string,
+	options: { offset?: number } = {},
+): Promise<EvmTokenTransfer[]> {
+	if (!config.apiKey.trim()) {
+		throw new MolianProviderError({
+			code: "missing_configuration",
+			chain,
+			address,
+			message: getMissingConfigMessage(chain),
+		});
+	}
+
+	const response = await fetchJson<EtherscanTokenTxListResponse>(config, chain, {
+		module: "account",
+		action: "tokentx",
+		address,
+		sort: "asc",
+		page: "1",
+		offset: String(options.offset ?? 200),
+		startblock: "0",
+		endblock: "99999999",
+	});
+
+	return Array.isArray(response.result) ? response.result : [];
 }

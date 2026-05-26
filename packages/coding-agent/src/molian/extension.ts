@@ -5,6 +5,7 @@ import {
 	runMolianChainConfigWizard,
 } from "./chain-config.ts";
 import { handleAnalyzeCommand } from "./commands/analyze.ts";
+import { handleMolianReportCommand } from "./commands/report.ts";
 import { createGetAddressRiskSignalsTool } from "./tools/get-address-risk-signals.ts";
 import { createGetBtcAddressOverviewTool } from "./tools/get-btc-address-overview.ts";
 import { createGetEvmAddressOverviewTool } from "./tools/get-evm-address-overview.ts";
@@ -17,6 +18,13 @@ function molianExtension(pi: ExtensionAPI): void {
 		description: "Analyze a public blockchain address: /analyze <address> [chain]",
 		handler: async (args, ctx) => {
 			await handleAnalyzeCommand(pi, args, ctx);
+		},
+	});
+
+	pi.registerCommand("report", {
+		description: "Generate an HTML asset-proof report: /report <address> <chain> [output.html]",
+		handler: async (args, ctx) => {
+			await handleMolianReportCommand(args, ctx);
 		},
 	});
 

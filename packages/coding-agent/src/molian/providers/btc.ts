@@ -120,6 +120,15 @@ function getLargeTransfers(address: string, txs: MempoolTx[]): AddressOverview["
 				amount: satsToBtc(amount),
 				symbol: "BTC",
 				direction: incoming >= outgoing ? ("in" as const) : ("out" as const),
+				txHash: tx.txid,
+				counterpartyAddress:
+					incoming >= outgoing
+						? tx.vin
+								?.find((input) => input.prevout?.scriptpubkey_address?.toLowerCase() !== normalizedAddress)
+								?.prevout?.scriptpubkey_address?.toLowerCase()
+						: tx.vout
+								?.find((output) => output.scriptpubkey_address?.toLowerCase() !== normalizedAddress)
+								?.scriptpubkey_address?.toLowerCase(),
 				rawValue: amount,
 			};
 		})

@@ -31,7 +31,7 @@ export interface MolianChainConfigWizardResult {
 
 const REQUIRED_CHAINS: MolianConfigurableChain[] = ["eth", "bsc", "tron"];
 const DEFAULT_EVM_BASE_URLS: Record<MolianEvmChain, string> = {
-	eth: "https://api.etherscan.io/api",
+	eth: "https://api.etherscan.io/v2/api",
 	bsc: "https://api.bscscan.com/api",
 };
 const DEFAULT_TRON_BASE_URL = "https://api.trongrid.io";
