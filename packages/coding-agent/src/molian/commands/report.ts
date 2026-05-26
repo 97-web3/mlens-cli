@@ -1,15 +1,19 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/index.ts";
-import {
-	exportMolianAssetProofReport,
-	isSupportedMolianReportChain,
-	type MolianAssetProofProgressEvent,
-} from "../asset-proof-workflow.ts";
-import {
-	createMolianReportProgressMessage,
-	formatMolianReportProgressWidgetLines,
-	updateMolianReportProgress,
-} from "../report-progress.ts";
+import { isSupportedMolianReportChain } from "../asset-proof-workflow.ts";
 import type { SupportedChain } from "../tools/types.ts";
+
+const EVM_ADDRESS_PATTERN = /\b0x[a-fA-F0-9]{40}\b/u;
+const TRON_ADDRESS_PATTERN = /\bT[1-9A-HJ-NP-Za-km-z]{33}\b/u;
+const BTC_ADDRESS_PATTERN = /\b(?:bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})\b/u;
+
+const REPORT_INTENT_PATTERNS = [
+	/资产证明/u,
+	/证明报告/u,
+	/链上报告/u,
+	/\basset[- ]proof\b/iu,
+	/\bproof of assets?\b/iu,
+	/\breport\b/iu,
+];
 
 export interface ParsedMolianReportArgs {
 	address: string;
@@ -17,13 +21,13 @@ export interface ParsedMolianReportArgs {
 	outputPath?: string;
 }
 
-export interface MolianReportCommandDeps {
-	exportReport: typeof exportMolianAssetProofReport;
+export interface MolianReportWorkflowRequest {
+	address: string;
+	chain?: SupportedChain;
+	outputPath?: string;
+	originalInput: string;
+	source: "command" | "interactive";
 }
-
-const DEFAULT_DEPS: MolianReportCommandDeps = {
-	exportReport: exportMolianAssetProofReport,
-};
 
 export function parseMolianReportArgs(rawArgs: string): ParsedMolianReportArgs | { error: string } {
 	const [address, rawChain, outputPath] = rawArgs
@@ -42,11 +46,78 @@ export function parseMolianReportArgs(rawArgs: string): ParsedMolianReportArgs |
 	return { address, chain: rawChain, outputPath };
 }
 
+function extractAddress(text: string): string | undefined {
+	return (
+		text.match(EVM_ADDRESS_PATTERN)?.[0] ??
+		text.match(TRON_ADDRESS_PATTERN)?.[0] ??
+		text.match(BTC_ADDRESS_PATTERN)?.[0]
+	);
+}
+
+function hasStrongReportIntent(text: string): boolean {
+	return REPORT_INTENT_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function detectChain(text: string): SupportedChain | undefined {
+	const normalized = text.toLowerCase();
+	if (/(^|\W)(eth|ethereum)(\W|$)/u.test(normalized) || /以太坊/u.test(text)) {
+		return "eth";
+	}
+	if (/(^|\W)(bsc|bnb)(\W|$)/u.test(normalized) || /币安/u.test(text)) {
+		return "bsc";
+	}
+	if (/(^|\W)(tron|trx)(\W|$)/u.test(normalized) || /波场/u.test(text)) {
+		return "tron";
+	}
+	if (/(^|\W)(btc|bitcoin)(\W|$)/u.test(normalized) || /比特币/u.test(text)) {
+		return "btc";
+	}
+	return undefined;
+}
+
+export function maybeCreateMolianReportWorkflowRequest(text: string): MolianReportWorkflowRequest | undefined {
+	if (!hasStrongReportIntent(text)) {
+		return undefined;
+	}
+	const address = extractAddress(text);
+	if (!address) {
+		return undefined;
+	}
+	return {
+		address,
+		chain: detectChain(text),
+		originalInput: text,
+		source: "interactive",
+	};
+}
+
+export function buildMolianReportWorkflowPrompt(request: MolianReportWorkflowRequest): string {
+	const requestedChain = request.chain ?? "unresolved";
+	const outputInstruction = request.outputPath
+		? `- Write the final HTML report to this exact path: ${request.outputPath}`
+		: "- If no explicit output path is requested, let the write tool use its default output path.";
+
+	return [
+		"Start the Molian staged asset-proof report workflow now.",
+		`Original user request: ${request.originalInput}`,
+		`Target address: ${request.address}`,
+		`Requested chain: ${requestedChain}`,
+		outputInstruction,
+		"Workflow requirements:",
+		"1. If the chain is unresolved, call `resolve_chain_for_address` first. If it remains ambiguous or unsupported, ask the user a concise follow-up instead of guessing.",
+		"2. Before each major stage, send one brief natural-language progress update so the CLI visibly leads the workflow.",
+		"3. Call `collect_molian_asset_proof_data` with the resolved chain and target address.",
+		"4. Based only on collected public-data facts, prepare an optional `summaryPatch`. Do not invent hashes, addresses, projects, balances, timestamps, or asset claims.",
+		"5. Call `build_molian_asset_proof_report` with the `runId` from the collect step. Include `summaryPatch` only if every field is grounded in the collected facts.",
+		"6. Call `write_molian_asset_proof_report_html` with the same `runId` to produce the final HTML report.",
+		"7. In the final answer, report the output path and explicitly state: 结论仅基于公开链上数据，可能不完整。",
+	].join("\n");
+}
+
 export async function handleMolianReportCommand(
-	pi: Pick<ExtensionAPI, "sendMessage">,
+	pi: Pick<ExtensionAPI, "sendUserMessage">,
 	rawArgs: string,
 	ctx: ExtensionCommandContext,
-	deps: MolianReportCommandDeps = DEFAULT_DEPS,
 ): Promise<void> {
 	const parsed = parseMolianReportArgs(rawArgs);
 	if ("error" in parsed) {
@@ -54,56 +125,19 @@ export async function handleMolianReportCommand(
 		return;
 	}
 
-	try {
-		const progressOrder: MolianAssetProofProgressEvent["stage"][] = [
-			"collecting_data",
-			"building_report",
-			"agent_summary",
-			"rendering_html",
-			"writing_file",
-		];
-		const runId = `report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-		let progressMessageSent = false;
-		const result = await deps.exportReport({
-			address: parsed.address,
-			chain: parsed.chain,
-			outputPath: parsed.outputPath,
-			cwd: ctx.cwd,
-			authStorage: ctx.modelRegistry.authStorage,
-			modelRegistry: ctx.modelRegistry,
-			model: ctx.model ?? undefined,
-			enableAgentSummary: true,
-			onProgress: (event) => {
-				const details = {
-					...event,
-					runId,
-					index: progressOrder.indexOf(event.stage) + 1,
-					total: progressOrder.length,
-				};
-				updateMolianReportProgress(details);
-				ctx.ui.setStatus("molian.report", event.message);
-				ctx.ui.setWidget("molian.report.progress", formatMolianReportProgressWidgetLines(details), {
-					placement: "belowEditor",
-				});
-				if (!progressMessageSent) {
-					progressMessageSent = true;
-					pi.sendMessage(createMolianReportProgressMessage(details));
-				}
-			},
-		});
+	const workflowPrompt = buildMolianReportWorkflowPrompt({
+		address: parsed.address,
+		chain: parsed.chain,
+		outputPath: parsed.outputPath,
+		originalInput: rawArgs,
+		source: "command",
+	});
 
-		ctx.ui.setStatus("molian.report", undefined);
-		ctx.ui.setWidget("molian.report.progress", undefined, { placement: "belowEditor" });
-		ctx.ui.notify(
-			`Asset-proof report exported to ${result.outputPath}${result.usedAgentSummary ? " (agent summary applied)." : "."}`,
-			"info",
-		);
-	} catch (error) {
-		ctx.ui.setStatus("molian.report", undefined);
-		ctx.ui.setWidget("molian.report.progress", undefined, { placement: "belowEditor" });
-		ctx.ui.notify(
-			`Failed to export asset-proof report: ${error instanceof Error ? error.message : String(error)}`,
-			"error",
-		);
+	if (ctx.isIdle()) {
+		pi.sendUserMessage(workflowPrompt);
+		return;
 	}
+
+	pi.sendUserMessage(workflowPrompt, { deliverAs: "followUp" });
+	ctx.ui.notify("Queued staged report workflow after the current response.", "info");
 }

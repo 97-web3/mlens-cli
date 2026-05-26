@@ -12,6 +12,7 @@ import { resolvePath } from "../utils/paths.ts";
 import {
 	createMolianAssetProofReportFilename,
 	createMolianAssetProofReportTemplate,
+	type MolianAddressProfile,
 	type MolianAssetFlowCoverage,
 	type MolianAssetPriceSource,
 	type MolianAssetPriceStatus,
@@ -91,6 +92,24 @@ export interface BuildMolianAssetProofReportOptions {
 	providerOverrides?: MolianReportProviderOverrides;
 }
 
+export interface MolianCollectedAssetProofData {
+	address: string;
+	chain: SupportedChain;
+	generatedAt: string;
+	dataAsOf: string;
+	addressProfile: MolianAddressProfile;
+	assetProofItems: MolianAssetProofItem[];
+	participationItems: MolianParticipationItem[];
+	evidenceSamples: MolianEvidenceSampleRow[];
+	sourceSummary: string;
+}
+
+export interface BuildMolianAssetProofReportFromCollectedDataOptions {
+	collectedData: MolianCollectedAssetProofData;
+	providerOverrides?: MolianReportProviderOverrides;
+	summaryPatch?: MolianAgentSummaryPatch;
+}
+
 export interface ExportMolianAssetProofReportOptions extends BuildMolianAssetProofReportOptions {
 	cwd?: string;
 	agentDir?: string;
@@ -100,6 +119,13 @@ export interface ExportMolianAssetProofReportOptions extends BuildMolianAssetPro
 	narrator?: MolianAssetProofNarrator;
 	modelRegistry?: ModelRegistry;
 	model?: Model<any>;
+}
+
+export interface WriteMolianAssetProofReportHtmlOptions {
+	report: MolianAssetProofReport;
+	cwd?: string;
+	outputPath?: string;
+	onProgress?: (event: MolianAssetProofProgressEvent) => void;
 }
 
 export interface ExportMolianAssetProofReportResult {
@@ -221,6 +247,47 @@ function buildProgressSnapshot(report: MolianAssetProofReport): MolianAssetProof
 		participationCount: report.participationItems.length,
 		evidenceCount: report.evidenceSamples.length,
 	};
+}
+
+function buildCollectedDataSnapshot(collectedData: MolianCollectedAssetProofData): MolianAssetProofProgressSnapshot {
+	return {
+		chain: collectedData.chain,
+		totalTxCount: collectedData.addressProfile.totalTxCount,
+		tokenTransferCount: collectedData.addressProfile.tokenTransferCount,
+		currentNativeBalance: collectedData.addressProfile.currentNativeBalance,
+		assetCount: collectedData.assetProofItems.length,
+		participationCount: collectedData.participationItems.length,
+		evidenceCount: collectedData.evidenceSamples.length,
+	};
+}
+
+function createCollectedDataFromReport(report: MolianAssetProofReport): MolianCollectedAssetProofData {
+	return {
+		address: report.reportMeta.targetAddress,
+		chain: report.reportMeta.chain,
+		generatedAt: report.reportMeta.generatedAt,
+		dataAsOf: report.reportMeta.dataAsOf,
+		addressProfile: structuredClone(report.addressProfile),
+		assetProofItems: structuredClone(report.assetProofItems),
+		participationItems: structuredClone(report.participationItems),
+		evidenceSamples: structuredClone(report.evidenceSamples),
+		sourceSummary: report.reportMeta.sourceSummary,
+	};
+}
+
+function createReportFromCollectedData(collectedData: MolianCollectedAssetProofData): MolianAssetProofReport {
+	const report = createMolianAssetProofReportTemplate({
+		targetAddress: collectedData.address,
+		chain: collectedData.chain,
+	});
+	report.reportMeta.generatedAt = collectedData.generatedAt;
+	report.reportMeta.dataAsOf = collectedData.dataAsOf;
+	report.addressProfile = structuredClone(collectedData.addressProfile);
+	report.assetProofItems = structuredClone(collectedData.assetProofItems);
+	report.participationItems = structuredClone(collectedData.participationItems);
+	report.evidenceSamples = structuredClone(collectedData.evidenceSamples);
+	report.reportMeta.sourceSummary = collectedData.sourceSummary;
+	return report;
 }
 
 function formatAssetFlowText(amount: string | undefined, symbol: string): string {
@@ -725,16 +792,8 @@ function parseNarratorResponse(value: MolianAgentSummaryPatch | string): MolianA
 	return parsed as MolianAgentSummaryPatch;
 }
 
-async function maybeApplyNarratorSummary(
-	report: MolianAssetProofReport,
-	narrator: MolianAssetProofNarrator | undefined,
-): Promise<boolean> {
-	if (!narrator) {
-		return false;
-	}
-
-	const rawPatch = await narrator.narrate(report);
-	const patch = sanitizeNarratorPatch(parseNarratorResponse(rawPatch), report);
+function applySummaryPatch(report: MolianAssetProofReport, summaryPatch: MolianAgentSummaryPatch): boolean {
+	const patch = sanitizeNarratorPatch(summaryPatch, report);
 	if (patch.overallGrade) report.executiveSummary.overallGrade = patch.overallGrade;
 	if (patch.coreConclusion) report.executiveSummary.coreConclusion = patch.coreConclusion;
 	if (patch.topFindings) report.executiveSummary.topFindings = patch.topFindings;
@@ -930,6 +989,16 @@ async function buildTronReport(
 export async function buildMolianAssetProofReport(
 	options: BuildMolianAssetProofReportOptions,
 ): Promise<MolianAssetProofReport> {
+	const collectedData = await collectMolianAssetProofData(options);
+	return buildMolianAssetProofReportFromCollectedData({
+		collectedData,
+		providerOverrides: options.providerOverrides,
+	});
+}
+
+export async function collectMolianAssetProofData(
+	options: BuildMolianAssetProofReportOptions,
+): Promise<MolianCollectedAssetProofData> {
 	const authStorage = options.authStorage ?? AuthStorage.create(join(getAgentDir(), "auth.json"));
 	const report = createMolianAssetProofReportTemplate({
 		targetAddress: options.address,
@@ -953,8 +1022,18 @@ export async function buildMolianAssetProofReport(
 			throw new Error("SOL asset-proof workflow is not implemented yet.");
 	}
 
+	return createCollectedDataFromReport(report);
+}
+
+export async function buildMolianAssetProofReportFromCollectedData(
+	options: BuildMolianAssetProofReportFromCollectedDataOptions,
+): Promise<MolianAssetProofReport> {
+	const report = createReportFromCollectedData(options.collectedData);
 	await applyAssetMarketPrices(report, options.providerOverrides ?? {});
 	fillDeterministicSummary(report);
+	if (options.summaryPatch) {
+		applySummaryPatch(report, options.summaryPatch);
+	}
 	return report;
 }
 
@@ -965,17 +1044,37 @@ function resolveOutputPath(cwd: string, outputPath: string | undefined, report: 
 	return join(cwd, "molian-reports", createMolianAssetProofReportFilename(report));
 }
 
+export async function writeMolianAssetProofReportHtml(
+	options: WriteMolianAssetProofReportHtmlOptions,
+): Promise<{ html: string; outputPath: string }> {
+	const cwd = resolvePath(options.cwd ?? process.cwd());
+	options.onProgress?.({
+		stage: "rendering_html",
+		message: "Rendering HTML report...",
+		snapshot: buildProgressSnapshot(options.report),
+	});
+	const html = renderMolianAssetProofReportHtml(options.report);
+	const finalOutputPath = resolveOutputPath(cwd, options.outputPath, options.report);
+	options.onProgress?.({
+		stage: "writing_file",
+		message: `Writing report file to ${finalOutputPath}`,
+		snapshot: buildProgressSnapshot(options.report),
+	});
+	await mkdir(dirname(finalOutputPath), { recursive: true });
+	await writeFile(finalOutputPath, html, "utf-8");
+	return { html, outputPath: finalOutputPath };
+}
+
 export async function exportMolianAssetProofReport(
 	options: ExportMolianAssetProofReportOptions,
 ): Promise<ExportMolianAssetProofReportResult> {
-	const cwd = resolvePath(options.cwd ?? process.cwd());
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getAgentDir();
 	const authStorage = options.authStorage ?? AuthStorage.create(join(agentDir, "auth.json"));
 	options.onProgress?.({
 		stage: "collecting_data",
 		message: "Collecting on-chain data...",
 	});
-	const report = await buildMolianAssetProofReport({
+	const collectedData = await collectMolianAssetProofData({
 		address: options.address,
 		chain: options.chain,
 		authStorage,
@@ -987,13 +1086,17 @@ export async function exportMolianAssetProofReport(
 	options.onProgress?.({
 		stage: "building_report",
 		message: "Building quantitative report structure...",
-		snapshot: buildProgressSnapshot(report),
+		snapshot: buildCollectedDataSnapshot(collectedData),
+	});
+	const report = await buildMolianAssetProofReportFromCollectedData({
+		collectedData,
+		providerOverrides: options.providerOverrides,
 	});
 
 	let narrator = options.narrator;
 	if (!narrator && options.enableAgentSummary) {
 		narrator = createDefaultNarrator({
-			cwd,
+			cwd: resolvePath(options.cwd ?? process.cwd()),
 			agentDir,
 			authStorage,
 			modelRegistry: options.modelRegistry,
@@ -1008,28 +1111,22 @@ export async function exportMolianAssetProofReport(
 			snapshot: buildProgressSnapshot(report),
 		});
 		try {
-			usedAgentSummary = await maybeApplyNarratorSummary(report, narrator);
+			usedAgentSummary = narrator
+				? applySummaryPatch(report, parseNarratorResponse(await narrator.narrate(report)))
+				: false;
 		} catch {}
 	}
-	options.onProgress?.({
-		stage: "rendering_html",
-		message: "Rendering HTML report...",
-		snapshot: buildProgressSnapshot(report),
+	const { html, outputPath } = await writeMolianAssetProofReportHtml({
+		report,
+		cwd: options.cwd,
+		outputPath: options.outputPath,
+		onProgress: options.onProgress,
 	});
-	const html = renderMolianAssetProofReportHtml(report);
-	const finalOutputPath = resolveOutputPath(cwd, options.outputPath, report);
-	options.onProgress?.({
-		stage: "writing_file",
-		message: `Writing report file to ${finalOutputPath}`,
-		snapshot: buildProgressSnapshot(report),
-	});
-	await mkdir(dirname(finalOutputPath), { recursive: true });
-	await writeFile(finalOutputPath, html, "utf-8");
 
 	return {
 		report,
 		html,
-		outputPath: finalOutputPath,
+		outputPath,
 		usedAgentSummary,
 	};
 }

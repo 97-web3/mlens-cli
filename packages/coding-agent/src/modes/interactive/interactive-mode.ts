@@ -88,9 +88,6 @@ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
-import { exportMolianAssetProofReport } from "../../molian/asset-proof-workflow.ts";
-import { parseMolianReportArgs } from "../../molian/commands/report.ts";
-import { createMolianReportProgressMessage, updateMolianReportProgress } from "../../molian/report-progress.ts";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -5025,10 +5022,6 @@ export class InteractiveMode {
 	}
 
 	private async handleExportCommand(text: string): Promise<void> {
-		if (await this.tryHandleAddressReportExport(text)) {
-			return;
-		}
-
 		const outputPath = this.getPathCommandArgument(text, "/export");
 
 		try {
@@ -5042,64 +5035,6 @@ export class InteractiveMode {
 		} catch (error: unknown) {
 			this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
-	}
-
-	private async tryHandleAddressReportExport(text: string): Promise<boolean> {
-		if (!text.startsWith("/export ")) {
-			return false;
-		}
-
-		const parsed = parseMolianReportArgs(text.slice("/export ".length));
-		if ("error" in parsed) {
-			return false;
-		}
-
-		try {
-			const progressOrder = [
-				"collecting_data",
-				"building_report",
-				"agent_summary",
-				"rendering_html",
-				"writing_file",
-			] as const;
-			const runId = `report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-			let progressMessageSent = false;
-			const result = await exportMolianAssetProofReport({
-				address: parsed.address,
-				chain: parsed.chain,
-				outputPath: parsed.outputPath,
-				cwd: this.sessionManager.getCwd(),
-				authStorage: this.session.modelRegistry.authStorage,
-				modelRegistry: this.session.modelRegistry,
-				model: this.session.model ?? undefined,
-				enableAgentSummary: true,
-				onProgress: (event) => {
-					const details = {
-						...event,
-						runId,
-						index: progressOrder.indexOf(event.stage) + 1,
-						total: progressOrder.length,
-					};
-					updateMolianReportProgress(details);
-					this.setExtensionStatus("molian.report", event.message);
-					if (!progressMessageSent) {
-						progressMessageSent = true;
-						void this.session.sendCustomMessage(createMolianReportProgressMessage(details));
-					}
-				},
-			});
-			this.setExtensionStatus("molian.report", undefined);
-			this.showStatus(
-				`Asset-proof report exported to ${result.outputPath}${result.usedAgentSummary ? " (agent summary applied)." : "."}`,
-			);
-		} catch (error: unknown) {
-			this.setExtensionStatus("molian.report", undefined);
-			this.showError(
-				`Failed to export asset-proof report: ${error instanceof Error ? error.message : "Unknown error"}`,
-			);
-		}
-
-		return true;
 	}
 
 	private getPathCommandArgument(text: string, command: "/export" | "/import"): string | undefined {

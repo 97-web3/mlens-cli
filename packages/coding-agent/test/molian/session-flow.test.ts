@@ -23,7 +23,14 @@ describe("molian session flow", () => {
 		expect(commands).toContain("report");
 		expect(commands).toContain("chain-config");
 		expect(commands).not.toContain("analyze");
-		expect(harness.session.getAllTools().map((tool) => tool.name)).toContain("resolve_chain_for_address");
+		expect(harness.session.getAllTools().map((tool) => tool.name)).toEqual(
+			expect.arrayContaining([
+				"resolve_chain_for_address",
+				"collect_molian_asset_proof_data",
+				"build_molian_asset_proof_report",
+				"write_molian_asset_proof_report_html",
+			]),
+		);
 		expect(harness.session.extensionRunner.getMessageRenderer(MOLIAN_REPORT_PROGRESS_CUSTOM_TYPE)).toBeDefined();
 	});
 });

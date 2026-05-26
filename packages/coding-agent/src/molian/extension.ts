@@ -4,14 +4,21 @@ import {
 	maybePromptForMolianChainConfigOnStartup,
 	runMolianChainConfigWizard,
 } from "./chain-config.ts";
-import { handleMolianReportCommand } from "./commands/report.ts";
+import {
+	buildMolianReportWorkflowPrompt,
+	handleMolianReportCommand,
+	maybeCreateMolianReportWorkflowRequest,
+} from "./commands/report.ts";
 import { MOLIAN_REPORT_PROGRESS_CUSTOM_TYPE, renderMolianReportProgressMessage } from "./report-progress.ts";
+import { createBuildMolianAssetProofReportTool } from "./tools/build-molian-asset-proof-report.ts";
+import { createCollectMolianAssetProofDataTool } from "./tools/collect-molian-asset-proof-data.ts";
 import { createGetAddressRiskSignalsTool } from "./tools/get-address-risk-signals.ts";
 import { createGetBtcAddressOverviewTool } from "./tools/get-btc-address-overview.ts";
 import { createGetEvmAddressOverviewTool } from "./tools/get-evm-address-overview.ts";
 import { createGetSolAddressOverviewTool } from "./tools/get-sol-address-overview.ts";
 import { createGetTronAddressOverviewTool } from "./tools/get-tron-address-overview.ts";
 import { createResolveChainTool } from "./tools/resolve-chain.ts";
+import { createWriteMolianAssetProofReportHtmlTool } from "./tools/write-molian-asset-proof-report-html.ts";
 
 function molianExtension(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer(MOLIAN_REPORT_PROGRESS_CUSTOM_TYPE, renderMolianReportProgressMessage);
@@ -30,8 +37,28 @@ function molianExtension(pi: ExtensionAPI): void {
 		},
 	});
 
+	pi.on("input", async (event) => {
+		if (event.source !== "interactive" || event.text.trimStart().startsWith("/")) {
+			return { action: "continue" };
+		}
+
+		const request = maybeCreateMolianReportWorkflowRequest(event.text);
+		if (!request) {
+			return { action: "continue" };
+		}
+
+		return {
+			action: "transform",
+			text: buildMolianReportWorkflowPrompt(request),
+			images: event.images,
+		};
+	});
+
 	pi.on("session_start", async (event, ctx) => {
 		pi.registerTool(createResolveChainTool());
+		pi.registerTool(createCollectMolianAssetProofDataTool());
+		pi.registerTool(createBuildMolianAssetProofReportTool());
+		pi.registerTool(createWriteMolianAssetProofReportHtmlTool());
 		pi.registerTool(createGetEvmAddressOverviewTool());
 		pi.registerTool(createGetBtcAddressOverviewTool());
 		pi.registerTool(createGetTronAddressOverviewTool());
