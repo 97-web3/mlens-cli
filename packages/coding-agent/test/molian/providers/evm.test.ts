@@ -242,6 +242,37 @@ describe("getEvmAddressOverview", () => {
 		);
 	});
 
+	it("surfaces null explorer error payloads without throwing trim type errors", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(
+				Response.json({
+					status: "1",
+					message: "OK",
+					result: "2500000000000000000",
+				}),
+			)
+			.mockResolvedValueOnce(
+				Response.json({
+					status: "0",
+					message: "NOTOK",
+					result: null,
+				}),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const config = {
+			baseUrl: "https://api.etherscan.io/v2/api",
+			apiKey: "test-key",
+		};
+		const address = "0x65f0ec303ad5007be21f6808febb3edccd1369e1";
+
+		await expect(getEvmAddressOverview(config, "bsc", address)).rejects.toMatchObject({
+			name: "MolianProviderError",
+			message: "Explorer history request failed.",
+		});
+	});
+
 	it("surfaces malformed native transfer values instead of throwing raw BigInt errors", async () => {
 		const fetchMock = vi
 			.fn()

@@ -3,14 +3,14 @@ import { type AddressOverview, MolianProviderError } from "../tools/types.ts";
 
 interface EtherscanBalanceResponse {
 	status: string;
-	message: string;
-	result: string;
+	message: string | null;
+	result: string | null;
 }
 
 interface EtherscanListResponse<T> {
 	status: string;
-	message: string;
-	result: T[] | string;
+	message: string | null;
+	result: T[] | string | null;
 }
 
 interface EtherscanTx {
@@ -36,6 +36,23 @@ export interface EvmTokenTransfer {
 
 const DEFAULT_EVM_HISTORY_PAGE_SIZE = 200;
 const EXPLORER_EMPTY_RESULT_PATTERNS = [/^no transactions found$/iu, /^no records found$/iu];
+const EXPLORER_GENERIC_MESSAGE_PATTERNS = [/^ok$/iu, /^notok$/iu];
+
+function normalizeExplorerText(value: unknown): string {
+	return typeof value === "string" ? value.trim() : "";
+}
+
+function getExplorerErrorMessage(result: unknown, message: unknown, fallbackMessage: string): string {
+	const normalizedResult = normalizeExplorerText(result);
+	if (normalizedResult) {
+		return normalizedResult;
+	}
+	const normalizedMessage = normalizeExplorerText(message);
+	if (normalizedMessage && !EXPLORER_GENERIC_MESSAGE_PATTERNS.some((pattern) => pattern.test(normalizedMessage))) {
+		return normalizedMessage;
+	}
+	return fallbackMessage;
+}
 
 function getMissingConfigMessage(chain: "eth" | "bsc"): string {
 	return `Missing ${chain.toUpperCase()} API key. Run /chain-config to configure chain API access.`;
@@ -96,9 +113,9 @@ async function fetchPaginatedResults<T>(
 	return results;
 }
 
-function isExplorerEmptyResult(message: string, result: string): boolean {
-	const normalizedMessage = message.trim();
-	const normalizedResult = result.trim();
+function isExplorerEmptyResult(message: unknown, result: unknown): boolean {
+	const normalizedMessage = normalizeExplorerText(message);
+	const normalizedResult = normalizeExplorerText(result);
 	return EXPLORER_EMPTY_RESULT_PATTERNS.some(
 		(pattern) => pattern.test(normalizedMessage) || pattern.test(normalizedResult),
 	);
@@ -123,18 +140,19 @@ function parseExplorerListResult<T>(response: EtherscanListResponse<T>, chain: "
 	throw createExplorerProviderError(
 		chain,
 		address,
-		response.result.trim() || response.message.trim() || "Explorer history request failed.",
+		getExplorerErrorMessage(response.result, response.message, "Explorer history request failed."),
 	);
 }
 
 function parseExplorerBalanceResult(response: EtherscanBalanceResponse, chain: "eth" | "bsc", address: string): string {
-	if (/^\d+$/u.test(response.result.trim())) {
-		return response.result;
+	const normalizedResult = normalizeExplorerText(response.result);
+	if (/^\d+$/u.test(normalizedResult)) {
+		return normalizedResult;
 	}
 	throw createExplorerProviderError(
 		chain,
 		address,
-		response.result.trim() || response.message.trim() || "Explorer balance request failed.",
+		getExplorerErrorMessage(response.result, response.message, "Explorer balance request failed."),
 	);
 }
 
