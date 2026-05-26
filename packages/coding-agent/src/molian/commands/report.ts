@@ -110,7 +110,6 @@ export function buildMolianReportWorkflowPrompt(request: MolianReportWorkflowReq
 		"4. Based only on collected public-data facts, prepare an optional `summaryPatch`. Do not invent hashes, addresses, projects, balances, timestamps, or asset claims.",
 		"5. Call `build_molian_asset_proof_report` with the `runId` from the collect step. Include `summaryPatch` only if every field is grounded in the collected facts.",
 		"6. Call `write_molian_asset_proof_report_html` with the same `runId` to produce the final HTML report.",
-		"7. In the final answer, report the output path and explicitly state: 结论仅基于公开链上数据，可能不完整。",
 	].join("\n");
 }
 
