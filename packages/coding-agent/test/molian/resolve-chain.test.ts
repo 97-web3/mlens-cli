@@ -10,6 +10,10 @@ describe("resolveChainForAddress", () => {
 		expect(resolveChainForAddress("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080")).toBe("btc");
 	});
 
+	it("detects TRON addresses before the generic base58 fallback", () => {
+		expect(resolveChainForAddress("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8")).toBe("tron");
+	});
+
 	it("detects SOL addresses", () => {
 		expect(resolveChainForAddress("Vote111111111111111111111111111111111111111")).toBe("sol");
 	});

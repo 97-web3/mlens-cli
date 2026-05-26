@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { defineTool } from "../../core/extensions/index.ts";
+import { resolveMolianEvmProviderConfig } from "../chain-config.ts";
 import { getEvmAddressOverview } from "../providers/evm.ts";
 
 export function createGetEvmAddressOverviewTool() {
@@ -13,8 +14,12 @@ export function createGetEvmAddressOverviewTool() {
 			chain: Type.Union([Type.Literal("eth"), Type.Literal("bsc")]),
 			address: Type.String({ description: "EVM address to inspect." }),
 		}),
-		execute: async (_toolCallId, params) => {
-			const overview = await getEvmAddressOverview(params.chain, params.address);
+		execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+			const overview = await getEvmAddressOverview(
+				resolveMolianEvmProviderConfig(ctx.modelRegistry.authStorage, params.chain),
+				params.chain,
+				params.address,
+			);
 			return {
 				content: [{ type: "text", text: JSON.stringify(overview, null, 2) }],
 				details: overview,

@@ -1,4 +1,4 @@
-export type SupportedChain = "eth" | "bsc" | "btc" | "sol";
+export type SupportedChain = "eth" | "bsc" | "tron" | "btc" | "sol";
 
 export type ResolvedChainKind = SupportedChain | "evm" | "unknown";
 

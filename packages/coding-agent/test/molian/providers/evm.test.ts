@@ -4,18 +4,22 @@ import { getEvmAddressOverview } from "../../../src/molian/providers/evm.ts";
 describe("getEvmAddressOverview", () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
-		delete process.env.MOLIAN_ETH_API_KEY;
-		delete process.env.MOLIAN_ETH_API_URL;
 	});
 
 	it("requires an API key", async () => {
-		await expect(getEvmAddressOverview("eth", "0x742d35Cc6634C0532925a3b844Bc454e4438f44e")).rejects.toThrow(
-			"Missing MOLIAN_ETH_API_KEY environment variable.",
-		);
+		await expect(
+			getEvmAddressOverview(
+				{
+					baseUrl: "https://api.etherscan.io/api",
+					apiKey: "",
+				},
+				"eth",
+				"0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+			),
+		).rejects.toThrow("Missing ETH API key. Run /chain-config to configure chain API access.");
 	});
 
 	it("normalizes explorer responses into an address overview", async () => {
-		process.env.MOLIAN_ETH_API_KEY = "test-key";
 		const fetchMock = vi
 			.fn()
 			.mockResolvedValueOnce(
@@ -49,7 +53,14 @@ describe("getEvmAddressOverview", () => {
 			);
 		vi.stubGlobal("fetch", fetchMock);
 
-		const overview = await getEvmAddressOverview("eth", "0x742d35Cc6634C0532925a3b844Bc454e4438f44e");
+		const overview = await getEvmAddressOverview(
+			{
+				baseUrl: "https://api.etherscan.io/api",
+				apiKey: "test-key",
+			},
+			"eth",
+			"0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+		);
 
 		expect(overview.chain).toBe("eth");
 		expect(overview.balanceSummary.nativeBalance).toBe("2.5");

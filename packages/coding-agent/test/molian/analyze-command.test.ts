@@ -19,6 +19,13 @@ describe("molian analyze command", () => {
 		expect(parseAnalyzeArgs("0xabc eth")).toEqual({ address: "0xabc", chain: "eth" });
 	});
 
+	it("accepts tron as an explicit chain", () => {
+		expect(parseAnalyzeArgs("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8 tron")).toEqual({
+			address: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+			chain: "tron",
+		});
+	});
+
 	it("reports usage when address is missing", async () => {
 		const pi = createExtensionApi();
 		const ctx = createCommandContext();
@@ -44,5 +51,12 @@ describe("molian analyze command", () => {
 		expect(pi.sendUserMessage).toHaveBeenCalledWith(
 			buildAnalyzePrompt("0x742d35Cc6634C0532925a3b844Bc454e4438f44e", "eth"),
 		);
+	});
+
+	it("infers tron for tron-style addresses", async () => {
+		const pi = createExtensionApi();
+		const ctx = createCommandContext();
+		await handleAnalyzeCommand(pi, "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8", ctx);
+		expect(pi.sendUserMessage).toHaveBeenCalledWith(buildAnalyzePrompt("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8", "tron"));
 	});
 });

@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/index.ts";
 import { resolveChainForAddress } from "../tools/resolve-chain.ts";
 
-const SUPPORTED_CHAINS = new Set(["eth", "bsc", "btc", "sol"]);
+const SUPPORTED_CHAINS = new Set(["eth", "bsc", "tron", "btc", "sol"]);
 
 export function buildAnalyzePrompt(address: string, chain?: string): string {
 	const chainText = chain ? `已知链别：${chain}` : "链别：需要先判定，若是 EVM 地址则要求用户明确 eth 或 bsc";
@@ -25,7 +25,7 @@ export function parseAnalyzeArgs(rawArgs: string): { address?: string; chain?: s
 	}
 
 	if (rawChain && !SUPPORTED_CHAINS.has(rawChain)) {
-		return { error: `Unsupported chain "${rawChain}". Use eth, bsc, btc, or sol.` };
+		return { error: `Unsupported chain "${rawChain}". Use eth, bsc, tron, btc, or sol.` };
 	}
 
 	return { address, chain: rawChain };
@@ -46,7 +46,7 @@ export async function handleAnalyzeCommand(
 	const resolved = resolveChainForAddress(address);
 
 	if (!parsed.chain && resolved === "unknown") {
-		ctx.ui.notify("Address format is not recognized. Supported chains: eth, bsc, btc, sol.", "warning");
+		ctx.ui.notify("Address format is not recognized. Supported chains: eth, bsc, tron, btc, sol.", "warning");
 		return;
 	}
 
@@ -55,6 +55,7 @@ export async function handleAnalyzeCommand(
 		return;
 	}
 
-	const inferredChain = parsed.chain ?? (resolved === "btc" || resolved === "sol" ? resolved : undefined);
+	const inferredChain =
+		parsed.chain ?? (resolved === "tron" || resolved === "btc" || resolved === "sol" ? resolved : undefined);
 	pi.sendUserMessage(buildAnalyzePrompt(address, inferredChain));
 }

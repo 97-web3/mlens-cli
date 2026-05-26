@@ -1,3 +1,4 @@
+import type { MolianEvmProviderConfig } from "../chain-config.ts";
 import { type AddressOverview, MolianProviderError } from "../tools/types.ts";
 
 interface EtherscanBalanceResponse {
@@ -21,39 +22,25 @@ interface EtherscanTxListResponse {
 	result: EtherscanTx[] | string;
 }
 
-function getEnv(name: string): string | undefined {
-	const value = process.env[name];
-	const trimmed = value?.trim();
-	return trimmed ? trimmed : undefined;
+function getMissingConfigMessage(chain: "eth" | "bsc"): string {
+	return `Missing ${chain.toUpperCase()} API key. Run /chain-config to configure chain API access.`;
 }
 
-function getBaseUrl(chain: "eth" | "bsc"): string {
-	const explicit = chain === "eth" ? getEnv("MOLIAN_ETH_API_URL") : getEnv("MOLIAN_BSC_API_URL");
-	if (explicit) {
-		return explicit.replace(/\/+$/, "");
-	}
-
-	return chain === "eth" ? "https://api.etherscan.io/api" : "https://api.bscscan.com/api";
-}
-
-function getApiKey(chain: "eth" | "bsc"): string | undefined {
-	return chain === "eth" ? getEnv("MOLIAN_ETH_API_KEY") : getEnv("MOLIAN_BSC_API_KEY");
-}
-
-function buildUrl(chain: "eth" | "bsc", params: Record<string, string>): string {
-	const url = new URL(getBaseUrl(chain));
+function buildUrl(baseUrl: string, apiKey: string, params: Record<string, string>): string {
+	const url = new URL(baseUrl.replace(/\/+$/, ""));
 	for (const [key, value] of Object.entries(params)) {
 		url.searchParams.set(key, value);
 	}
-	const apiKey = getApiKey(chain);
-	if (apiKey) {
-		url.searchParams.set("apikey", apiKey);
-	}
+	url.searchParams.set("apikey", apiKey);
 	return url.toString();
 }
 
-async function fetchJson<T>(chain: "eth" | "bsc", params: Record<string, string>): Promise<T> {
-	const response = await fetch(buildUrl(chain, params));
+async function fetchJson<T>(
+	config: MolianEvmProviderConfig,
+	chain: "eth" | "bsc",
+	params: Record<string, string>,
+): Promise<T> {
+	const response = await fetch(buildUrl(config.baseUrl, config.apiKey, params));
 	if (!response.ok) {
 		throw new MolianProviderError({
 			code: "provider_error",
@@ -64,7 +51,7 @@ async function fetchJson<T>(chain: "eth" | "bsc", params: Record<string, string>
 	return (await response.json()) as T;
 }
 
-function toEth(balanceWei: string): string {
+function toNative(balanceWei: string): string {
 	const value = BigInt(balanceWei);
 	const whole = value / 1000000000000000000n;
 	const fractional = value % 1000000000000000000n;
@@ -94,12 +81,16 @@ function uniqueCounterparties(address: string, txs: EtherscanTx[]): AddressOverv
 		.map(([counterparty, txCount]) => ({ address: counterparty, txCount, relation: "recent transfer counterparty" }));
 }
 
-function summarizeLargeTransfers(txs: EtherscanTx[]): AddressOverview["transferSummary"]["largeTransfers"] {
+function summarizeLargeTransfers(
+	chain: "eth" | "bsc",
+	txs: EtherscanTx[],
+): AddressOverview["transferSummary"]["largeTransfers"] {
+	const symbol = chain === "eth" ? "ETH" : "BNB";
 	return txs
 		.map((tx) => ({
 			timestamp: new Date(Number(tx.timeStamp) * 1000).toISOString(),
-			amount: toEth(tx.value),
-			symbol: "ETH",
+			amount: toNative(tx.value),
+			symbol,
 			direction: "out" as const,
 			rawValue: BigInt(tx.value),
 		}))
@@ -108,24 +99,28 @@ function summarizeLargeTransfers(txs: EtherscanTx[]): AddressOverview["transferS
 		.map(({ rawValue: _rawValue, ...transfer }) => transfer);
 }
 
-export async function getEvmAddressOverview(chain: "eth" | "bsc", address: string): Promise<AddressOverview> {
-	if (!getApiKey(chain)) {
+export async function getEvmAddressOverview(
+	config: MolianEvmProviderConfig,
+	chain: "eth" | "bsc",
+	address: string,
+): Promise<AddressOverview> {
+	if (!config.apiKey.trim()) {
 		throw new MolianProviderError({
 			code: "missing_configuration",
 			chain,
 			address,
-			message: `Missing ${chain === "eth" ? "MOLIAN_ETH_API_KEY" : "MOLIAN_BSC_API_KEY"} environment variable.`,
+			message: getMissingConfigMessage(chain),
 		});
 	}
 
 	const [balanceResponse, txResponse] = await Promise.all([
-		fetchJson<EtherscanBalanceResponse>(chain, {
+		fetchJson<EtherscanBalanceResponse>(config, chain, {
 			module: "account",
 			action: "balance",
 			address,
 			tag: "latest",
 		}),
-		fetchJson<EtherscanTxListResponse>(chain, {
+		fetchJson<EtherscanTxListResponse>(config, chain, {
 			module: "account",
 			action: "txlist",
 			address,
@@ -146,7 +141,7 @@ export async function getEvmAddressOverview(chain: "eth" | "bsc", address: strin
 		address,
 		balanceSummary: {
 			nativeSymbol: chain === "eth" ? "ETH" : "BNB",
-			nativeBalance: toEth(balanceResponse.result || "0"),
+			nativeBalance: toNative(balanceResponse.result || "0"),
 		},
 		activitySummary: {
 			txCount: txs.length,
@@ -158,7 +153,7 @@ export async function getEvmAddressOverview(chain: "eth" | "bsc", address: strin
 					: undefined,
 		},
 		transferSummary: {
-			largeTransfers: summarizeLargeTransfers(txs),
+			largeTransfers: summarizeLargeTransfers(chain, txs),
 		},
 		counterparties: uniqueCounterparties(address, txs),
 		labels: [],
