@@ -90,6 +90,7 @@ export interface ExportMolianAssetProofReportOptions extends BuildMolianAssetPro
 	agentDir?: string;
 	outputPath?: string;
 	enableAgentSummary?: boolean;
+	onProgress?: (event: MolianAssetProofProgressEvent) => void;
 	narrator?: MolianAssetProofNarrator;
 	modelRegistry?: ModelRegistry;
 	model?: Model<any>;
@@ -100,6 +101,11 @@ export interface ExportMolianAssetProofReportResult {
 	html: string;
 	outputPath: string;
 	usedAgentSummary: boolean;
+}
+
+export interface MolianAssetProofProgressEvent {
+	stage: "collecting_data" | "building_report" | "agent_summary" | "rendering_html" | "writing_file";
+	message: string;
 }
 
 type TokenAssetSummary = {
@@ -448,12 +454,12 @@ function fillDeterministicSummary(report: MolianAssetProofReport): void {
 
 	report.executiveSummary.coreConclusion =
 		grade === "strong_support"
-			? "该地址存在多组链上资产与项目交互证据，能够较强支持资产证明方向。"
+			? "该地址存在多组链上资产与项目交互证据，可强支持资产证明。"
 			: grade === "moderate_support"
-				? "该地址存在一定的链上资产持有与交互证据，可中度支持资产证明方向。"
+				? "该地址存在一定链上持仓与交互证据，可中度支持资产证明。"
 				: grade === "weak_support"
-					? "该地址仅能提供有限链上样本，当前只能弱支持资产证明方向。"
-					: "当前链上样本不足，无法对资产证明形成可靠判断。";
+					? "该地址仅提供有限链上样本，当前仅弱支持资产证明。"
+					: "当前链上样本不足，暂无法判断资产证明力度。";
 }
 
 function sanitizeNarratorPatch(
@@ -754,6 +760,10 @@ export async function exportMolianAssetProofReport(
 	const cwd = resolvePath(options.cwd ?? process.cwd());
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getAgentDir();
 	const authStorage = options.authStorage ?? AuthStorage.create(join(agentDir, "auth.json"));
+	options.onProgress?.({
+		stage: "collecting_data",
+		message: "Collecting on-chain data...",
+	});
 	const report = await buildMolianAssetProofReport({
 		address: options.address,
 		chain: options.chain,
@@ -762,6 +772,10 @@ export async function exportMolianAssetProofReport(
 		generatedAt: options.generatedAt,
 		dataAsOf: options.dataAsOf,
 		providerOverrides: options.providerOverrides,
+	});
+	options.onProgress?.({
+		stage: "building_report",
+		message: "Building quantitative report structure...",
 	});
 
 	let narrator = options.narrator;
@@ -776,6 +790,10 @@ export async function exportMolianAssetProofReport(
 	}
 	let usedAgentSummary = false;
 	if (options.enableAgentSummary) {
+		options.onProgress?.({
+			stage: "agent_summary",
+			message: "Applying agent summary guard...",
+		});
 		try {
 			usedAgentSummary = await maybeApplyNarratorSummary(report, narrator);
 		} catch (error) {
@@ -784,8 +802,16 @@ export async function exportMolianAssetProofReport(
 			);
 		}
 	}
+	options.onProgress?.({
+		stage: "rendering_html",
+		message: "Rendering HTML report...",
+	});
 	const html = renderMolianAssetProofReportHtml(report);
 	const finalOutputPath = resolveOutputPath(cwd, options.outputPath, report);
+	options.onProgress?.({
+		stage: "writing_file",
+		message: `Writing report file to ${finalOutputPath}...`,
+	});
 	await mkdir(dirname(finalOutputPath), { recursive: true });
 	await writeFile(finalOutputPath, html, "utf-8");
 

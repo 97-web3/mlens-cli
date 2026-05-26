@@ -54,13 +54,18 @@ export async function handleMolianReportCommand(
 			modelRegistry: ctx.modelRegistry,
 			model: ctx.model ?? undefined,
 			enableAgentSummary: true,
+			onProgress: (event) => {
+				ctx.ui.setStatus("molian.report", event.message);
+			},
 		});
 
+		ctx.ui.setStatus("molian.report", undefined);
 		ctx.ui.notify(
 			`Asset-proof report exported to ${result.outputPath}${result.usedAgentSummary ? " (agent summary applied)." : "."}`,
 			"info",
 		);
 	} catch (error) {
+		ctx.ui.setStatus("molian.report", undefined);
 		ctx.ui.notify(
 			`Failed to export asset-proof report: ${error instanceof Error ? error.message : String(error)}`,
 			"error",

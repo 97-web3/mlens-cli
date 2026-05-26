@@ -88,6 +88,8 @@ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
+import { exportMolianAssetProofReport } from "../../molian/asset-proof-workflow.ts";
+import { parseMolianReportArgs } from "../../molian/commands/report.ts";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -204,6 +206,7 @@ function hasDefaultModelProvider(providerId: string): providerId is keyof typeof
 }
 
 const BEDROCK_PROVIDER_ID = "amazon-bedrock";
+const BUILTIN_EXTENSION_COMMAND_AUTOCOMPLETE_OVERRIDES = new Set(["report"]);
 
 const BUILT_IN_MODEL_PROVIDERS = new Set<string>(getProviders());
 
@@ -450,7 +453,10 @@ export class InteractiveMode {
 		const builtinNames = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
 		return extensionRunner
 			.getRegisteredCommands()
-			.filter((command) => builtinNames.has(command.name))
+			.filter(
+				(command) =>
+					builtinNames.has(command.name) && !BUILTIN_EXTENSION_COMMAND_AUTOCOMPLETE_OVERRIDES.has(command.name),
+			)
 			.map((command) => ({
 				type: "warning" as const,
 				message:
@@ -5018,6 +5024,10 @@ export class InteractiveMode {
 	}
 
 	private async handleExportCommand(text: string): Promise<void> {
+		if (await this.tryHandleAddressReportExport(text)) {
+			return;
+		}
+
 		const outputPath = this.getPathCommandArgument(text, "/export");
 
 		try {
@@ -5031,6 +5041,44 @@ export class InteractiveMode {
 		} catch (error: unknown) {
 			this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
+	}
+
+	private async tryHandleAddressReportExport(text: string): Promise<boolean> {
+		if (!text.startsWith("/export ")) {
+			return false;
+		}
+
+		const parsed = parseMolianReportArgs(text.slice("/export ".length));
+		if ("error" in parsed) {
+			return false;
+		}
+
+		try {
+			const result = await exportMolianAssetProofReport({
+				address: parsed.address,
+				chain: parsed.chain,
+				outputPath: parsed.outputPath,
+				cwd: this.sessionManager.getCwd(),
+				authStorage: this.session.modelRegistry.authStorage,
+				modelRegistry: this.session.modelRegistry,
+				model: this.session.model ?? undefined,
+				enableAgentSummary: true,
+				onProgress: (event) => {
+					this.setExtensionStatus("molian.report", event.message);
+				},
+			});
+			this.setExtensionStatus("molian.report", undefined);
+			this.showStatus(
+				`Asset-proof report exported to ${result.outputPath}${result.usedAgentSummary ? " (agent summary applied)." : "."}`,
+			);
+		} catch (error: unknown) {
+			this.setExtensionStatus("molian.report", undefined);
+			this.showError(
+				`Failed to export asset-proof report: ${error instanceof Error ? error.message : "Unknown error"}`,
+			);
+		}
+
+		return true;
 	}
 
 	private getPathCommandArgument(text: string, command: "/export" | "/import"): string | undefined {

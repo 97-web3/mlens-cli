@@ -33,6 +33,7 @@ describe("molian report command", () => {
 
 	it("exports a report and notifies the user with the final path", async () => {
 		const notify = vi.fn();
+		const setStatus = vi.fn();
 		const exportReport = vi.fn().mockResolvedValue({
 			outputPath: "/tmp/mlens-report.html",
 			usedAgentSummary: true,
@@ -41,7 +42,7 @@ describe("molian report command", () => {
 		await handleMolianReportCommand(
 			"0xabc eth",
 			{
-				ui: { notify },
+				ui: { notify, setStatus },
 				cwd: "/repo",
 				modelRegistry: { authStorage: {} },
 				model: { provider: "openai", id: "gpt-5.4", api: "responses" },
@@ -55,8 +56,14 @@ describe("molian report command", () => {
 				chain: "eth",
 				cwd: "/repo",
 				enableAgentSummary: true,
+				onProgress: expect.any(Function),
 			}),
 		);
+		const onProgress = exportReport.mock.calls[0]?.[0]?.onProgress as
+			| ((event: { stage: string; message: string }) => void)
+			| undefined;
+		onProgress?.({ stage: "collecting_data", message: "Collecting on-chain data..." });
+		expect(setStatus).toHaveBeenCalledWith("molian.report", "Collecting on-chain data...");
 		expect(notify).toHaveBeenCalledWith(
 			"Asset-proof report exported to /tmp/mlens-report.html (agent summary applied).",
 			"info",

@@ -133,6 +133,7 @@ describe("molian asset proof workflow", () => {
 	it("exports html and applies guarded agent summary patch", async () => {
 		const tempDir = createTempDir();
 		const authStorage = AuthStorage.inMemory();
+		const progressStages: string[] = [];
 		const narrator: MolianAssetProofNarrator = {
 			async narrate() {
 				return {
@@ -155,6 +156,9 @@ describe("molian asset proof workflow", () => {
 			dataAsOf: "2026-01-30T00:00:00.000Z",
 			enableAgentSummary: true,
 			narrator,
+			onProgress: (event) => {
+				progressStages.push(event.stage);
+			},
 			providerOverrides: {
 				btcOverview: async () => ({
 					chain: "btc",
@@ -199,5 +203,12 @@ describe("molian asset proof workflow", () => {
 		expect(html).toContain("&lt;b&gt;较强&lt;/b&gt;");
 		expect(html).toContain("仅覆盖公开数据");
 		expect(result.outputPath).toContain("/molian-reports/");
+		expect(progressStages).toEqual([
+			"collecting_data",
+			"building_report",
+			"agent_summary",
+			"rendering_html",
+			"writing_file",
+		]);
 	});
 });

@@ -255,6 +255,23 @@ function renderKeyValueGrid(items: Array<{ label: string; value: string }>): str
 	</div>`;
 }
 
+function renderQuantSummary(report: MolianAssetProofReport): string {
+	return `<div class="panel">
+		<h3>量化快照</h3>
+		${renderKeyValueGrid([
+			{ label: "链", value: escapeHtml(report.reportMeta.chain.toUpperCase()) },
+			{ label: "首次活跃", value: formatMaybeText(report.addressProfile.firstActivityAt) },
+			{ label: "最后活跃", value: formatMaybeText(report.addressProfile.lastActivityAt) },
+			{ label: "总交易笔数", value: formatMaybeNumber(report.addressProfile.totalTxCount) },
+			{ label: "Token 转账笔数", value: formatMaybeNumber(report.addressProfile.tokenTransferCount) },
+			{ label: "当前原生币余额", value: formatMaybeText(report.addressProfile.currentNativeBalance) },
+			{ label: "重点资产数", value: escapeHtml(String(report.assetProofItems.length)) },
+			{ label: "项目线索数", value: escapeHtml(String(report.participationItems.length)) },
+			{ label: "关键证据样本数", value: escapeHtml(String(report.evidenceSamples.length)) },
+		])}
+	</div>`;
+}
+
 function renderAssetProofItems(items: MolianAssetProofItem[]): string {
 	if (items.length === 0) {
 		return '<p class="placeholder-block">未发现可支持证据</p>';
@@ -637,6 +654,7 @@ function renderStyles(): string {
 function renderExecutiveSummary(report: MolianAssetProofReport): string {
 	return `<section class="section">
 		<h2 class="section-title">报告摘要</h2>
+		${renderQuantSummary(report)}
 		<div class="panel">
 			<div class="card-header">
 				<div>
@@ -680,6 +698,10 @@ function renderAddressProfile(report: MolianAssetProofReport): string {
 function renderLimitations(report: MolianAssetProofReport): string {
 	return `<section class="section">
 		<h2 class="section-title">结论与局限</h2>
+		<div class="panel">
+			<h3>最终简结</h3>
+			<p class="summary-text">${formatMaybeText(report.executiveSummary.coreConclusion)}</p>
+		</div>
 		<div class="two-column">
 			<div class="panel">
 				<h3>当前无法判断</h3>

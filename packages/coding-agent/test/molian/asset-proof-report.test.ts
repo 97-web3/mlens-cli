@@ -129,6 +129,7 @@ describe("molian asset proof report template", () => {
 		expect(html).toContain("<!DOCTYPE html>");
 		expect(html).toContain("资产证明审查报告");
 		expect(html).toContain("报告摘要");
+		expect(html).toContain("量化快照");
 		expect(html).toContain("地址基本信息");
 		expect(html).toContain("早期持仓证明");
 		expect(html).toContain("历史余额与峰值证明");
@@ -138,6 +139,7 @@ describe("molian asset proof report template", () => {
 		expect(html).toContain("强支持");
 		expect(html).toContain('href="https://etherscan.io/tx/0xabc"');
 		expect(html).toContain("Uniswap LP");
+		expect(html).toContain("最终简结");
 	});
 
 	it("escapes unsafe html and shows placeholders for empty sections", () => {
