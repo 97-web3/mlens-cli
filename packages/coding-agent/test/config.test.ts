@@ -4,14 +4,18 @@ import { delimiter, join } from "path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
 	detectInstallMethod,
+	getAppProfile,
+	getReleaseBinarySelfUpdateConfig,
 	getSelfUpdateCommand,
 	getSelfUpdateUnavailableInstruction,
 	getUpdateInstruction,
+	getUserFacingExecutablePath,
 } from "../src/config.ts";
 
 const execPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath");
 const originalPath = process.env.PATH;
 const originalPiPackageDir = process.env.PI_PACKAGE_DIR;
+const originalPiAppProfile = process.env.PI_APP_PROFILE;
 const originalArgv1 = process.argv[1];
 let tempDir: string | undefined;
 
@@ -35,6 +39,11 @@ afterEach(() => {
 		delete process.env.PI_PACKAGE_DIR;
 	} else {
 		process.env.PI_PACKAGE_DIR = originalPiPackageDir;
+	}
+	if (originalPiAppProfile === undefined) {
+		delete process.env.PI_APP_PROFILE;
+	} else {
+		process.env.PI_APP_PROFILE = originalPiAppProfile;
 	}
 	if (originalArgv1 === undefined) {
 		process.argv.splice(1, 1);
@@ -401,5 +410,24 @@ describe("detectInstallMethod", () => {
 		expect(getSelfUpdateUnavailableInstruction("@earendil-works/pi-coding-agent")).toContain(
 			"https://github.com/97-web3/mlens-cli/releases/latest",
 		);
+	});
+
+	test("exposes mlens release-binary self-update metadata", () => {
+		process.env.PI_APP_PROFILE = "mlens";
+
+		expect(getAppProfile().id).toBe("mlens");
+		expect(getReleaseBinarySelfUpdateConfig()).toEqual({
+			repo: "97-web3/mlens-cli",
+			binaryName: "mlens",
+			archivePrefix: "mlens",
+		});
+	});
+
+	test("prefers the real release-binary executable path over Bun virtual paths", () => {
+		process.env.PI_APP_PROFILE = "mlens";
+		process.argv[1] = "/$bunfs/root/mlens";
+		setExecPath("/opt/mlens/mlens");
+
+		expect(getUserFacingExecutablePath()).toBe("/opt/mlens/mlens");
 	});
 });

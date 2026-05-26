@@ -13,4 +13,9 @@ export const MOLIAN_APP_PROFILE: AppProfile = {
 	latestReleaseApiAccept: "application/vnd.github+json",
 	releasesPageUrl: "https://github.com/97-web3/mlens-cli/releases/latest",
 	installCommand: "curl -fsSL https://raw.githubusercontent.com/97-web3/mlens-cli/main/install.sh | bash",
+	releaseBinarySelfUpdate: {
+		repo: "97-web3/mlens-cli",
+		binaryName: "mlens",
+		archivePrefix: "mlens",
+	},
 };

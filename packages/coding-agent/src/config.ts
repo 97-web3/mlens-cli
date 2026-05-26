@@ -39,6 +39,12 @@ export interface SelfUpdateCommand extends SelfUpdateCommandStep {
 	steps?: SelfUpdateCommandStep[];
 }
 
+export interface ReleaseBinarySelfUpdateConfig {
+	repo: string;
+	binaryName: string;
+	archivePrefix: string;
+}
+
 function makeSelfUpdateCommand(
 	installStep: SelfUpdateCommandStep,
 	uninstallStep?: SelfUpdateCommandStep,
@@ -461,6 +467,7 @@ export interface AppProfile {
 	latestReleaseApiAccept?: string;
 	releasesPageUrl?: string;
 	installCommand?: string;
+	releaseBinarySelfUpdate?: ReleaseBinarySelfUpdateConfig;
 }
 
 const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson;
@@ -543,6 +550,27 @@ export function getReleasesPageUrl(): string {
 
 export function getInstallCommandHint(): string | undefined {
 	return getAppProfile().installCommand;
+}
+
+export function getReleaseBinarySelfUpdateConfig(): ReleaseBinarySelfUpdateConfig | undefined {
+	return getAppProfile().releaseBinarySelfUpdate;
+}
+
+export function isReleaseBinaryInstall(): boolean {
+	const releaseBinaryConfig = getReleaseBinarySelfUpdateConfig();
+	if (!releaseBinaryConfig) {
+		return false;
+	}
+
+	const executableName = basename(process.execPath, extname(process.execPath)).toLowerCase();
+	return executableName === releaseBinaryConfig.binaryName.toLowerCase();
+}
+
+export function getUserFacingExecutablePath(): string | undefined {
+	if (isReleaseBinaryInstall()) {
+		return process.execPath || process.argv[1] || undefined;
+	}
+	return process.argv[1] || undefined;
 }
 
 // =============================================================================

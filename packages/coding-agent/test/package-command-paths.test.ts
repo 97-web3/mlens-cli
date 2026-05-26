@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +13,9 @@ describe("package commands", () => {
 	let packageDir: string;
 	let originalCwd: string;
 	let originalAgentDir: string | undefined;
+	let originalAppProfile: string | undefined;
 	let originalPiPackageDir: string | undefined;
+	let originalArgv1: string | undefined;
 	let originalExitCode: typeof process.exitCode;
 	let originalExecPath: string;
 
@@ -32,7 +35,9 @@ describe("package commands", () => {
 
 		originalCwd = process.cwd();
 		originalAgentDir = process.env[ENV_AGENT_DIR];
+		originalAppProfile = process.env.PI_APP_PROFILE;
 		originalPiPackageDir = process.env.PI_PACKAGE_DIR;
+		originalArgv1 = process.argv[1];
 		originalExitCode = process.exitCode;
 		originalExecPath = process.execPath;
 		process.exitCode = undefined;
@@ -49,14 +54,61 @@ describe("package commands", () => {
 		} else {
 			process.env[ENV_AGENT_DIR] = originalAgentDir;
 		}
+		if (originalAppProfile === undefined) {
+			delete process.env.PI_APP_PROFILE;
+		} else {
+			process.env.PI_APP_PROFILE = originalAppProfile;
+		}
 		if (originalPiPackageDir === undefined) {
 			delete process.env.PI_PACKAGE_DIR;
 		} else {
 			process.env.PI_PACKAGE_DIR = originalPiPackageDir;
 		}
+		if (originalArgv1 === undefined) {
+			process.argv.splice(1, 1);
+		} else {
+			process.argv[1] = originalArgv1;
+		}
 		Object.defineProperty(process, "execPath", { value: originalExecPath, configurable: true });
 		rmSync(tempDir, { recursive: true, force: true });
 	});
+
+	function isSupportedReleaseBinaryPlatform(): boolean {
+		if (process.platform !== "darwin" && process.platform !== "linux") {
+			return false;
+		}
+		return process.arch === "arm64" || process.arch === "x64";
+	}
+
+	function getCurrentMlensAssetName(): string {
+		if (!isSupportedReleaseBinaryPlatform()) {
+			throw new Error(`Unsupported test platform: ${process.platform}/${process.arch}`);
+		}
+		return `mlens-${process.platform}-${process.arch}.tar.gz`;
+	}
+
+	function createMlensReleaseArchive(rootDir: string, binaryContent: string): Buffer {
+		const sourceDir = join(rootDir, `archive-src-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const releaseRoot = join(sourceDir, "mlens");
+		mkdirSync(releaseRoot, { recursive: true });
+		writeFileSync(join(releaseRoot, "mlens"), binaryContent);
+		chmodSync(join(releaseRoot, "mlens"), 0o755);
+		writeFileSync(join(releaseRoot, "README.md"), "updated");
+
+		const archivePath = join(rootDir, getCurrentMlensAssetName());
+		const result = spawnSync("tar", ["czf", archivePath, "-C", sourceDir, "mlens"], { stdio: "pipe" });
+		if (result.status !== 0) {
+			throw new Error(result.stderr.toString() || `tar exited with code ${result.status ?? "unknown"}`);
+		}
+		return readFileSync(archivePath);
+	}
+
+	async function importMlensMain(): Promise<typeof main> {
+		vi.resetModules();
+		process.env.PI_APP_PROFILE = "mlens";
+		const module = await import("../src/main.ts");
+		return module.main;
+	}
 
 	it("should persist global relative local package paths relative to settings.json", async () => {
 		const relativePkgDir = join(projectDir, "packages", "local-package");
@@ -354,6 +406,200 @@ if(args.includes("install")) process.exit(23);
 		} finally {
 			errorSpy.mockRestore();
 			logSpy.mockRestore();
+		}
+	});
+
+	it("self-updates mlens release binaries on supported platforms", async () => {
+		if (!isSupportedReleaseBinaryPlatform()) {
+			return;
+		}
+
+		const installDir = join(tempDir, "mlens-install");
+		const archiveBuffer = createMlensReleaseArchive(tempDir, "new-binary");
+		const expectedArchiveUrl = `https://github.com/97-web3/mlens-cli/releases/download/v0.1.3/${getCurrentMlensAssetName()}`;
+		mkdirSync(installDir, { recursive: true });
+		writeFileSync(join(installDir, "mlens"), "old-binary");
+		chmodSync(join(installDir, "mlens"), 0o755);
+
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (url === "https://api.github.com/repos/97-web3/mlens-cli/releases/latest") {
+				return Response.json({ tag_name: "v0.1.3" });
+			}
+			if (url === expectedArchiveUrl) {
+				return new Response(archiveBuffer, { status: 200 });
+			}
+			throw new Error(`Unexpected fetch url: ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			const mlensMain = await importMlensMain();
+			process.env.PI_PACKAGE_DIR = installDir;
+			process.argv[1] = "/$bunfs/root/mlens";
+			Object.defineProperty(process, "execPath", {
+				value: join(installDir, "mlens"),
+				configurable: true,
+			});
+
+			await expect(mlensMain(["update", "--self"])).resolves.toBeUndefined();
+
+			expect(process.exitCode).toBeUndefined();
+			expect(errorSpy).not.toHaveBeenCalled();
+			expect(readFileSync(join(installDir, "mlens"), "utf-8")).toBe("new-binary");
+			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
+			expect(stdout).toContain("Updated mlens");
+		} finally {
+			logSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("forces mlens release-binary reinstalls via the latest download url", async () => {
+		if (!isSupportedReleaseBinaryPlatform()) {
+			return;
+		}
+
+		const installDir = join(tempDir, "mlens-force-install");
+		const archiveBuffer = createMlensReleaseArchive(tempDir, "forced-binary");
+		const expectedArchiveUrl = `https://github.com/97-web3/mlens-cli/releases/latest/download/${getCurrentMlensAssetName()}`;
+		mkdirSync(installDir, { recursive: true });
+		writeFileSync(join(installDir, "mlens"), "old-binary");
+		chmodSync(join(installDir, "mlens"), 0o755);
+
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (url === expectedArchiveUrl) {
+				return new Response(archiveBuffer, { status: 200 });
+			}
+			throw new Error(`Unexpected fetch url: ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			const mlensMain = await importMlensMain();
+			process.env.PI_PACKAGE_DIR = installDir;
+			process.argv[1] = "/$bunfs/root/mlens";
+			Object.defineProperty(process, "execPath", {
+				value: join(installDir, "mlens"),
+				configurable: true,
+			});
+
+			await expect(mlensMain(["update", "--self", "--force"])).resolves.toBeUndefined();
+
+			expect(process.exitCode).toBeUndefined();
+			expect(errorSpy).not.toHaveBeenCalled();
+			expect(fetchMock).toHaveBeenCalledOnce();
+			expect(readFileSync(join(installDir, "mlens"), "utf-8")).toBe("forced-binary");
+		} finally {
+			logSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("falls back to manual mlens updates when the release-binary install is not writable", async () => {
+		if (!isSupportedReleaseBinaryPlatform()) {
+			return;
+		}
+
+		const installDir = join(tempDir, "mlens-readonly-install");
+		mkdirSync(installDir, { recursive: true });
+		writeFileSync(join(installDir, "mlens"), "old-binary");
+		chmodSync(join(installDir, "mlens"), 0o755);
+		chmodSync(installDir, 0o500);
+
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (url === "https://api.github.com/repos/97-web3/mlens-cli/releases/latest") {
+				return Response.json({ tag_name: "v0.1.3" });
+			}
+			throw new Error(`Unexpected fetch url: ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			const mlensMain = await importMlensMain();
+			process.env.PI_PACKAGE_DIR = installDir;
+			process.argv[1] = "/$bunfs/root/mlens";
+			Object.defineProperty(process, "execPath", {
+				value: join(installDir, "mlens"),
+				configurable: true,
+			});
+
+			await expect(mlensMain(["update", "--self"])).resolves.toBeUndefined();
+
+			expect(process.exitCode).toBe(1);
+			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
+			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
+			expect(stdout).not.toContain("Updated mlens");
+			expect(stderr).toContain("mlens cannot self-update this installation.");
+			expect(stderr).toContain(
+				"Re-run: curl -fsSL https://raw.githubusercontent.com/97-web3/mlens-cli/main/install.sh | bash",
+			);
+			expect(stderr).toContain(`Location of mlens executable: ${join(installDir, "mlens")}`);
+			expect(stderr).not.toContain("/$bunfs/root/mlens");
+		} finally {
+			chmodSync(installDir, 0o700);
+			logSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("updates packages before updating the mlens release binary by default", async () => {
+		if (!isSupportedReleaseBinaryPlatform()) {
+			return;
+		}
+
+		const installDir = join(tempDir, "mlens-default-update-install");
+		const archiveBuffer = createMlensReleaseArchive(tempDir, "new-default-binary");
+		const expectedArchiveUrl = `https://github.com/97-web3/mlens-cli/releases/download/v0.1.3/${getCurrentMlensAssetName()}`;
+		mkdirSync(installDir, { recursive: true });
+		writeFileSync(join(installDir, "mlens"), "old-binary");
+		chmodSync(join(installDir, "mlens"), 0o755);
+
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (url === "https://api.github.com/repos/97-web3/mlens-cli/releases/latest") {
+				return Response.json({ tag_name: "v0.1.3" });
+			}
+			if (url === expectedArchiveUrl) {
+				return new Response(archiveBuffer, { status: 200 });
+			}
+			throw new Error(`Unexpected fetch url: ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			const mlensMain = await importMlensMain();
+			process.env.PI_PACKAGE_DIR = installDir;
+			process.argv[1] = "/$bunfs/root/mlens";
+			Object.defineProperty(process, "execPath", {
+				value: join(installDir, "mlens"),
+				configurable: true,
+			});
+
+			await expect(mlensMain(["update"])).resolves.toBeUndefined();
+
+			expect(process.exitCode).toBeUndefined();
+			expect(errorSpy).not.toHaveBeenCalled();
+			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
+			expect(stdout.indexOf("Updated packages")).toBeGreaterThanOrEqual(0);
+			expect(stdout.indexOf("Updated mlens")).toBeGreaterThan(stdout.indexOf("Updated packages"));
+		} finally {
+			logSpy.mockRestore();
+			errorSpy.mockRestore();
 		}
 	});
 });

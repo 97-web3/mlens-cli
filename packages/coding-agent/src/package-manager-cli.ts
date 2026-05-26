@@ -1,3 +1,5 @@
+import { accessSync, constants } from "node:fs";
+import { dirname } from "node:path";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { selectConfig } from "./cli/config-selector.ts";
@@ -6,8 +8,11 @@ import {
 	detectInstallMethod,
 	getAgentDir,
 	getPackageDir,
+	getReleaseBinarySelfUpdateConfig,
 	getSelfUpdateCommand,
 	getSelfUpdateUnavailableInstruction,
+	getUserFacingExecutablePath,
+	isReleaseBinaryInstall,
 	PACKAGE_NAME,
 	type SelfUpdateCommand,
 	VERSION,
@@ -15,6 +20,7 @@ import {
 import { DefaultPackageManager } from "./core/package-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { spawnProcess } from "./utils/child-process.ts";
+import { getReleaseBinaryAssetInfo, runReleaseBinarySelfUpdate } from "./utils/release-binary-self-update.ts";
 import { getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.ts";
 import {
 	cleanupWindowsSelfUpdateQuarantine,
@@ -300,10 +306,10 @@ function printSelfUpdateUnavailable(npmCommand?: string[], updatePackageName = P
 	console.error(`error: ${APP_NAME} cannot self-update this installation.`);
 	console.error(getSelfUpdateUnavailableInstruction(PACKAGE_NAME, npmCommand, updatePackageName));
 
-	const entrypoint = process.argv[1];
-	if (entrypoint) {
+	const executablePath = getUserFacingExecutablePath();
+	if (executablePath) {
 		console.error("");
-		console.error(`Location of ${APP_NAME} executable: ${entrypoint}`);
+		console.error(`Location of ${APP_NAME} executable: ${executablePath}`);
 	}
 }
 
@@ -335,6 +341,7 @@ interface SelfUpdatePlan {
 	packageName: string;
 	shouldRun: boolean;
 	note?: string;
+	version?: string;
 }
 
 async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
@@ -346,7 +353,12 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 		const latestRelease = await getLatestPiRelease(VERSION);
 		const packageName = latestRelease?.packageName ?? PACKAGE_NAME;
 		if (!latestRelease || packageName !== PACKAGE_NAME || isNewerPackageVersion(latestRelease.version, VERSION)) {
-			return { packageName, shouldRun: true, ...(latestRelease?.note ? { note: latestRelease.note } : {}) };
+			return {
+				packageName,
+				shouldRun: true,
+				...(latestRelease?.note ? { note: latestRelease.note } : {}),
+				...(latestRelease?.version ? { version: latestRelease.version } : {}),
+			};
 		}
 	} catch {
 		return { packageName: PACKAGE_NAME, shouldRun: true };
@@ -387,6 +399,17 @@ function prepareWindowsNpmSelfUpdate(): void {
 	const packageDir = getPackageDir();
 	cleanupWindowsSelfUpdateQuarantine(packageDir);
 	quarantineWindowsNativeDependencies(packageDir);
+}
+
+function isCurrentInstallPathWritable(): boolean {
+	const packageDir = getPackageDir();
+	try {
+		accessSync(packageDir, constants.W_OK);
+		accessSync(dirname(packageDir), constants.W_OK);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export async function handleConfigCommand(args: string[]): Promise<boolean> {
@@ -543,6 +566,44 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 						return true;
 					}
 					const installMethod = detectInstallMethod();
+					const releaseBinarySelfUpdateConfig = getReleaseBinarySelfUpdateConfig();
+					const releaseBinaryAssetInfo =
+						isReleaseBinaryInstall() && releaseBinarySelfUpdateConfig
+							? getReleaseBinaryAssetInfo(releaseBinarySelfUpdateConfig, undefined, selfUpdatePlan.version)
+							: undefined;
+					if (releaseBinarySelfUpdateConfig && releaseBinaryAssetInfo) {
+						if (!isCurrentInstallPathWritable()) {
+							printSelfUpdateUnavailable(selfUpdateNpmCommand, selfUpdatePlan.packageName);
+							process.exitCode = 1;
+							return true;
+						}
+						if (selfUpdatePlan.note) {
+							printSelfUpdateNote(selfUpdatePlan.note);
+						}
+						try {
+							await runReleaseBinarySelfUpdate({
+								config: releaseBinarySelfUpdateConfig,
+								installDir: getPackageDir(),
+								version: selfUpdatePlan.version,
+							});
+						} catch (error: unknown) {
+							const message = error instanceof Error ? error.message : "Unknown package command error";
+							console.error(chalk.red(`Error: ${message}`));
+							console.error(
+								chalk.dim(
+									getSelfUpdateUnavailableInstruction(
+										PACKAGE_NAME,
+										selfUpdateNpmCommand,
+										selfUpdatePlan.packageName,
+									),
+								),
+							);
+							process.exitCode = 1;
+							return true;
+						}
+						console.log(chalk.green(`Updated ${APP_NAME}`));
+						return true;
+					}
 					if (process.platform === "win32" && installMethod !== "npm" && installMethod !== "pnpm") {
 						console.error(
 							chalk.red(`${APP_NAME} self-update on Windows is only supported for npm and pnpm installs.`),
