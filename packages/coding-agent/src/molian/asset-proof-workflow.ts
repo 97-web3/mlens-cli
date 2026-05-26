@@ -35,7 +35,7 @@ import {
 import { resolveMolianAssetMarketPrice } from "./market-price.ts";
 import { getBtcAddressOverview } from "./providers/btc.ts";
 import { type EvmTokenTransfer, getEvmAddressOverview, getEvmTokenTransfers } from "./providers/evm.ts";
-import { getTronAddressOverview } from "./providers/tron.ts";
+import { getTronAddressOverview, getTronTokenTransfers, type TronTokenTransfer } from "./providers/tron.ts";
 import type { AddressOverview, SupportedChain } from "./tools/types.ts";
 
 const STABLECOIN_SYMBOLS = new Set(["USDT", "USDC", "DAI", "BUSD", "FDUSD", "TUSD"]);
@@ -74,6 +74,7 @@ export interface MolianReportProviderOverrides {
 	) => Promise<EvmTokenTransfer[]>;
 	btcOverview?: (config: MolianBtcProviderConfig, address: string) => Promise<AddressOverview>;
 	tronOverview?: (config: MolianTronProviderConfig, address: string) => Promise<AddressOverview>;
+	tronTokenTransfers?: (config: MolianTronProviderConfig, address: string) => Promise<TronTokenTransfer[]>;
 	marketPrice?: (symbol: string) => Promise<{
 		currentPriceUsd: string;
 		priceSource: MolianAssetPriceSource;
@@ -445,11 +446,18 @@ function buildNativeAssetItem(
 }
 
 function buildTokenAssetSummaries(
-	chain: MolianEvmChain,
+	chain: SupportedChain,
 	address: string,
-	transfers: EvmTokenTransfer[],
+	transfers: Array<EvmTokenTransfer | TronTokenTransfer>,
 ): TokenAssetSummary[] {
 	const normalizedAddress = normalizeAddress(address);
+	const chronologicalTransfers = [...transfers].sort((a, b) => {
+		const timestampDelta = Number(a.timeStamp) - Number(b.timeStamp);
+		if (timestampDelta !== 0) {
+			return timestampDelta;
+		}
+		return a.hash.localeCompare(b.hash);
+	});
 	const grouped = new Map<
 		string,
 		{
@@ -467,7 +475,7 @@ function buildTokenAssetSummaries(
 		}
 	>();
 
-	for (const transfer of transfers) {
+	for (const transfer of chronologicalTransfers) {
 		const symbol = transfer.tokenSymbol.trim() || "UNKNOWN";
 		const key = `${transfer.contractAddress.toLowerCase()}::${symbol.toUpperCase()}`;
 		const decimals = Number.parseInt(transfer.tokenDecimal, 10) || 0;
@@ -959,16 +967,36 @@ async function buildTronReport(
 	providerOverrides: MolianReportProviderOverrides,
 	onProgress?: (event: MolianAssetProofProgressEvent) => void,
 ): Promise<void> {
+	const config = resolveMolianTronProviderConfig(authStorage);
 	onProgress?.({
 		stage: "collecting_data",
 		message: "Collecting TRON native overview...",
 		snapshot: buildProgressSnapshot(report),
 	});
 	const overview = await (providerOverrides.tronOverview ?? getTronAddressOverview)(
-		resolveMolianTronProviderConfig(authStorage),
+		config,
 		report.reportMeta.targetAddress,
 	);
-	const nativeItem = buildNativeAssetItem("tron", overview, "sampled");
+	onProgress?.({
+		stage: "collecting_data",
+		message: "Collecting TRON TRC20 transfer history...",
+		snapshot: buildProgressSnapshot(report),
+	});
+	const tokenTransfers = await (providerOverrides.tronTokenTransfers ?? getTronTokenTransfers)(
+		config,
+		report.reportMeta.targetAddress,
+	);
+
+	const nativeItem = buildNativeAssetItem("tron", overview, "complete");
+	const tokenSummaries = buildTokenAssetSummaries("tron", report.reportMeta.targetAddress, tokenTransfers);
+	const tokenItems = buildTokenAssetItems(tokenSummaries);
+	const includeNativeItem =
+		overview.activitySummary.txCount > 0 ||
+		hasPositiveNumericText(overview.balanceSummary.nativeBalance) ||
+		hasPositiveNumericText(overview.balanceSummary.nativeStakedBalance) ||
+		hasPositiveNumericText(overview.transferSummary.totalIn) ||
+		hasPositiveNumericText(overview.transferSummary.totalOut) ||
+		(overview.transferSummary.largeTransfers?.length ?? 0) > 0;
 
 	report.addressProfile.firstActivityAt = overview.activitySummary.firstSeenAt;
 	report.addressProfile.lastActivityAt = overview.activitySummary.lastSeenAt;
@@ -976,14 +1004,25 @@ async function buildTronReport(
 		? `自 ${overview.activitySummary.firstSeenAt.slice(0, 10)} 起活跃`
 		: "";
 	report.addressProfile.totalTxCount = overview.activitySummary.txCount;
-	report.addressProfile.currentNativeBalance = `${overview.balanceSummary.nativeBalance} ${overview.balanceSummary.nativeSymbol}`;
+	report.addressProfile.tokenTransferCount = tokenTransfers.length;
+	report.addressProfile.currentNativeBalance = overview.balanceSummary.nativeStakedBalance
+		? `${overview.balanceSummary.nativeBalance} ${overview.balanceSummary.nativeSymbol}（含质押 ${overview.balanceSummary.nativeStakedBalance} ${overview.balanceSummary.nativeSymbol}）`
+		: `${overview.balanceSummary.nativeBalance} ${overview.balanceSummary.nativeSymbol}`;
+	report.addressProfile.currentKeyTokenHoldings = tokenItems.map((item) => item.assetSymbol).slice(0, 5);
 	report.addressProfile.primaryFundingSources = overview.counterparties.slice(0, 3).map((item) => item.address);
 	report.addressProfile.primaryExitDestinations = overview.counterparties.slice(0, 3).map((item) => item.address);
-	report.addressProfile.activityCharacterization = "当前为 TRON 原生资产样本分析。";
+	report.addressProfile.activityCharacterization =
+		tokenTransfers.length > 0
+			? "检测到 TRX 与 TRC20 层面的双重链上活动。"
+			: "当前仅检测到 TRX 原生资产层面的链上活动。";
 
-	report.assetProofItems = [nativeItem];
-	report.evidenceSamples = nativeItem.sampleEvidenceRows;
-	report.reportMeta.sourceSummary = overview.sourceMeta.provider;
+	report.assetProofItems = includeNativeItem ? [nativeItem, ...tokenItems] : tokenItems;
+	report.participationItems = buildParticipationItems(tokenSummaries);
+	report.evidenceSamples = dedupeEvidenceRows([
+		...nativeItem.sampleEvidenceRows,
+		...tokenItems.flatMap((item) => item.sampleEvidenceRows),
+	]).slice(0, 8);
+	report.reportMeta.sourceSummary = `${overview.sourceMeta.provider}, tron_token_transfers`;
 }
 
 export async function buildMolianAssetProofReport(

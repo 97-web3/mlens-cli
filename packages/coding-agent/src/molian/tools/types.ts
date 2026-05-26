@@ -8,6 +8,7 @@ export interface AddressOverview {
 	balanceSummary: {
 		nativeSymbol: string;
 		nativeBalance: string;
+		nativeStakedBalance?: string;
 		assets?: Array<{ symbol: string; amount: string }>;
 	};
 	activitySummary: {

@@ -365,7 +365,7 @@ describe("molian asset proof workflow", () => {
 		expect(html).toContain("BTC");
 	});
 
-	it("marks TRON native flow coverage as sampled", async () => {
+	it("builds a TRON report with native and TRC20 token assets", async () => {
 		const report = await buildMolianAssetProofReport({
 			address: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
 			chain: "tron",
@@ -376,7 +376,12 @@ describe("molian asset proof workflow", () => {
 				tronOverview: async () => ({
 					chain: "tron",
 					address: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-					balanceSummary: { nativeSymbol: "TRX", nativeBalance: "88" },
+					balanceSummary: {
+						nativeSymbol: "TRX",
+						nativeBalance: "88",
+						nativeStakedBalance: "108393",
+						assets: [{ symbol: "USDT", amount: "80154.420799" }],
+					},
 					activitySummary: {
 						txCount: 2,
 						firstSeenAt: "2024-01-01T00:00:00.000Z",
@@ -402,10 +407,45 @@ describe("molian asset proof workflow", () => {
 					labels: [],
 					sourceMeta: {
 						provider: "trongrid",
-						partial: true,
-						notes: ["Only sampled TRX transfer history is included in the MVP provider."],
+						partial: false,
+						notes: ["Sourced from TronGrid account, transfer, and TRC20 transfer endpoints."],
 					},
 				}),
+				tronTokenTransfers: async () => [
+					{
+						timeStamp: "1704240000",
+						hash: "trc20-hash-3",
+						from: "TThirdPartyAddress",
+						to: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+						value: "10000000",
+						tokenDecimal: "6",
+						tokenSymbol: "VANT",
+						tokenName: "Vantrix",
+						contractAddress: "TL81r5Zze7Av4DiKxCBzCbtDnUQVSQfm82",
+					},
+					{
+						timeStamp: "1704153600",
+						hash: "trc20-hash-2",
+						from: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+						to: "TReceiverAddress",
+						value: "5000000",
+						tokenDecimal: "6",
+						tokenSymbol: "VANT",
+						tokenName: "Vantrix",
+						contractAddress: "TL81r5Zze7Av4DiKxCBzCbtDnUQVSQfm82",
+					},
+					{
+						timeStamp: "1704067200",
+						hash: "trc20-hash-1",
+						from: "TSenderAddress",
+						to: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+						value: "20000000",
+						tokenDecimal: "6",
+						tokenSymbol: "VANT",
+						tokenName: "Vantrix",
+						contractAddress: "TL81r5Zze7Av4DiKxCBzCbtDnUQVSQfm82",
+					},
+				],
 				marketPrice: async () => ({
 					currentPriceUsd: "0.12",
 					priceSource: "binance",
@@ -417,9 +457,30 @@ describe("molian asset proof workflow", () => {
 
 		expect(report.assetProofItems[0]).toEqual(
 			expect.objectContaining({
+				assetSymbol: "TRX",
 				historicalTotalInText: "30 TRX",
 				historicalTotalOutText: "10 TRX",
-				flowCoverage: "sampled",
+				flowCoverage: "complete",
+			}),
+		);
+		expect(report.assetProofItems.map((item) => item.assetSymbol)).toContain("VANT");
+		expect(report.addressProfile.tokenTransferCount).toBe(3);
+		expect(report.addressProfile.currentNativeBalance).toContain("含质押 108393 TRX");
+		expect(report.assetProofItems.find((item) => item.assetSymbol === "VANT")).toEqual(
+			expect.objectContaining({
+				firstSeenAt: "2024-01-01T00:00:00.000Z",
+				firstAcquiredAt: "2024-01-01T00:00:00.000Z",
+				peakBalance: "25 VANT",
+				peakBalanceAt: "2024-01-03T00:00:00.000Z",
+				historicalTotalInText: "30 VANT",
+				historicalTotalOutText: "5 VANT",
+			}),
+		);
+		expect(report.participationItems.find((item) => item.projectName === "Vantrix")).toEqual(
+			expect.objectContaining({
+				participationAt: "2024-01-01T00:00:00.000Z",
+				inputAmountText: "20 VANT",
+				exitAmountText: "5 VANT",
 			}),
 		);
 	});
